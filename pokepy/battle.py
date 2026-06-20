@@ -3578,7 +3578,13 @@ class Battle:
 
                 # ▽ 技の修正（インデントをスペース16個に修正しました）
                 if self.command[player] in range(20):
-                    self.move[player] = p.moves[self.command[player] % 10]
+                    # ➔ 技スロットの範囲外アクセス（4枠未満の不一致）を完全に防ぐ安全ガード
+                    idx = self.command[player] % 10
+                    if idx < len(p.moves):
+                        self.move[player] = p.moves[idx]
+                    else:
+                        # 範囲外の場合は、1番目の技か「わるあがき」に安全に逃がす
+                        self.move[player] = p.moves[0] if p.moves else "わるあがき"
 
                 # メガシンカコマンド（60〜69）の処理
                 elif self.command[player] in range(60, 70):
