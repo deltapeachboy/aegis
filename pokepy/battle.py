@@ -2097,10 +2097,14 @@ class Battle:
                         ):
                             self.consume_item(player)
 
-        # HP割合の観測
-        Pokemon.find(self.observed[player], name=self.pokemon[player].name).hp_ratio = (
-            p.hp_ratio
-        )
+        # HP割合の観測（メガシンカ名ズレ等によるクラッシュ安全対策）
+        obs_poke = Pokemon.find(self.observed[player], name=self.pokemon[player].name)
+        if obs_poke is None:
+            # 名前でヒットしない場合、表示名(display_name)での曖昧検索を試みる
+            obs_poke = Pokemon.find(self.observed[player], display_name=self.pokemon[player].display_name)
+
+        if obs_poke is not None:
+            obs_poke.hp_ratio = p.hp_ratio
 
         return True
 
