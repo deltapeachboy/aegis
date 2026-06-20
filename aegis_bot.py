@@ -1,39 +1,74 @@
 import sys
 import types
 from typing import Optional, List, Dict, Any, Set, Tuple
+from copy import deepcopy
+import builtins
+import os
+import json
+import io
 
 # =========================================================================
-# 【Aegis Namespace Bridge for Web UI】
+# 0. 【File Path Redirect & Aegislash Data Patch (絶対位置対応版)】
+# どこから実行されても、自身の物理位置から 'battle_data/mb_learnset.json' を
+# 逆算し、強制リダイレクトとギルガルドの技同期を行う頑健なパッチ
+# =========================================================================
+_original_open = builtins.open
+
+
+def patched_open(file, *args, **kwargs):
+    if isinstance(file, str) and "learnset.json" in file:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        custom_path = os.path.join(base_dir, "battle_data", "mb_learnset.json")
+
+        if os.path.exists(custom_path):
+            print(f"ℹ️ [Redirect & Patch] '{file}' ➔ '{custom_path}' へ強制リダイレクトロードします。")
+
+            # 1. 実際に mb_learnset.json をロード
+            with _original_open(custom_path, "r", encoding="utf-8") as f:
+                learnset = json.load(f)
+
+            # 2. ギルガルド(ブレード/シールド)に技データを同期
+            base_key = "ギルガルド" if "ギルガルド" in learnset else "ギルガルド(シールド)"
+            if base_key in learnset:
+                learnset["ギルガルド(ブレード)"] = learnset[base_key]
+                learnset["ギルガルド(シールド)"] = learnset[base_key]
+
+            # 3. メモリ上でJSON文字列に戻し、ストリームオブジェクトとしてシミュレータに引き渡す
+            patched_json_str = json.dumps(learnset, ensure_ascii=False)
+            return io.StringIO(patched_json_str)
+
+    return _original_open(file, *args, **kwargs)
+
+
+builtins.open = patched_open
+
+# =========================================================================
+# 1. 【Aegis Namespace Bridge for Web UI】
 # Webサーバー(uvicorn)起動時にも古いシミュレータ名空間を pokepy へ自動リダイレクトするパッチ
 # =========================================================================
-# A. 空のプレースホルダーモジュールを先に sys.modules に登録する
 sys.modules['src.pokemon_battle_sim'] = types.ModuleType('src.pokemon_battle_sim')
 sys.modules['src.pokemon_battle_sim.pokemon'] = types.ModuleType('src.pokemon_battle_sim.pokemon')
 sys.modules['src.pokemon_battle_sim.battle'] = types.ModuleType('src.pokemon_battle_sim.battle')
 sys.modules['src.pokemon_battle_sim.damage'] = types.ModuleType('src.pokemon_battle_sim.damage')
 
-# B. 依存関係を持たない純粋な便利関数モジュール(utils)を最優先でロードして結合
 import pokepy.utils as utils_module
+
 sys.modules['src.pokemon_battle_sim.utils'] = utils_module
 
-# C. ポケモンとバトルの実体モジュールをロード
 import pokepy.pokemon as pokemon_module
 import pokepy.battle as battle_module
 
-# D. プレースホルダーの内部を実体コードで同期・埋める
 sys.modules['src.pokemon_battle_sim'].__dict__.update(pokemon_module.__dict__)
 sys.modules['src.pokemon_battle_sim.pokemon'].__dict__.update(pokemon_module.__dict__)
-sys.modules['src.pokemon_battle_sim.battle'].__dict__.update(battle_module.__dict__)  # 正しくbattle_moduleを割り当て
+sys.modules['src.pokemon_battle_sim.battle'].__dict__.update(battle_module.__dict__)
 sys.modules['src.pokemon_battle_sim.damage'].__dict__.update(pokemon_module.__dict__)
 # =========================================================================
 
 # =========================================================================
 # 2. 標準・外部ライブラリのロード
 # =========================================================================
-import os
 import time
 import warnings
-import json
 import numpy as np
 import cv2
 import mss  # 高速画面キャプチャライブラリ
@@ -92,6 +127,15 @@ class AegisTeamBuilder:
 
     def build_team(self, core_name: str) -> Dict[str, Any]:
         """指定された『軸(エース)』から、mbルールに適合した6体構築を自動生成する"""
+        # 図鑑側のエイリアス補正（ギルガルド対応）
+        if core_name == "ギルガルド" and "ギルガルド" not in Pokemon.zukan:
+            for k in ['ギルガルド(シールド)', 'ギルガルド（シールド）']:
+                if k in Pokemon.zukan:
+                    Pokemon.zukan['ギルガルド'] = deepcopy(Pokemon.zukan[k])
+                    Pokemon.zukan['ギルガルド']['display_name'] = 'ギルガルド'
+                    print(f"ℹ️ [Patch] Pokemon.zukan に '{k}' から 'ギルガルド' のエイリアスを生成しました。")
+                    break
+
         if core_name not in Pokemon.zukan:
             # 入力揺れの修正を試みる
             core_name = Pokemon.japanese_display_name.get(core_name, core_name)
@@ -115,6 +159,18 @@ class AegisTeamBuilder:
             for candidate in self.mb_pokemon:
                 if candidate in team_members:
                     continue
+
+                # 図鑑側のエイリアス動的適用
+                if candidate == "ギルガルド" and "ギルガルド" not in Pokemon.zukan:
+                    for k in ['ギルガルド(シールド)', 'ギルガルド（シールド）']:
+                        if k in Pokemon.zukan:
+                            Pokemon.zukan['ギルガルド'] = deepcopy(Pokemon.zukan[k])
+                            Pokemon.zukan['ギルガルド']['display_name'] = 'ギルガルド'
+                            break
+
+                if not Pokemon.zukan.get(candidate):
+                    continue
+
                 # 同一のディスプレネーム（重複種）を避ける
                 if any(Pokemon.zukan[candidate]["display_name"] == Pokemon.zukan[m]["display_name"] for m in
                        team_members):
@@ -308,8 +364,11 @@ class AegisAnalyzer(Pokebot):
         super().__init__()
         os.name = original_name
 
-        # 2. 画面キャプチャ(mss)のセットアップ
-        self.sct = mss.mss()
+        # 2. 画面キャプチャ(mss)のセットアップ (mss 警告対策に大文字 MSS に変更)
+        try:
+            self.sct = mss.MSS()
+        except Exception:
+            self.sct = None
         self.capture_box = capture_box
 
         # 3. mbルール環境設定のロード（初期シーズンのカスタム設定）
@@ -373,18 +432,24 @@ class AegisAnalyzer(Pokebot):
             print("✅ チームビルダーによる最強構築(1世代目)の自動生成が完了しました。")
 
     def _load_mb_rules(self) -> None:
-        """mbルールの定義ファイル群をロードし、シミュレータに注入する"""
+        """mbルールの定義ファイル群をロードし、シミュレータに注入する（絶対パス安全解決版）"""
         try:
-            with open("battle_data/mb_pokemon.txt", encoding="utf-8") as f:
+            # 自身のファイル物理位置からの絶対パス解決
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            pokemon_path = os.path.join(base_dir, "battle_data", "mb_pokemon.txt")
+            items_path = os.path.join(base_dir, "battle_data", "mb_items.txt")
+            learnset_path = os.path.join(base_dir, "battle_data", "mb_learnset.json")
+
+            with open(pokemon_path, encoding="utf-8") as f:
                 self.mb_pokemon = {line.strip() for line in f if line.strip()}
             Pokemon.permitted_pool = self.mb_pokemon
 
-            with open("battle_data/mb_items.txt", encoding="utf-8") as f:
+            with open(items_path, encoding="utf-8") as f:
                 self.mb_items = {line.strip() for line in f if line.strip()}
             Pokemon.permitted_items = self.mb_items
             Pokemon.mb_items = self.mb_items
 
-            with open("battle_data/mb_learnset.json", encoding="utf-8") as f:
+            with open(learnset_path, encoding="utf-8") as f:
                 self.mb_learnset = json.load(f)
             Pokemon.learnsets = self.mb_learnset
 
@@ -398,6 +463,8 @@ class AegisAnalyzer(Pokebot):
     def capture(self, filename=''):
         """PCの画面を直接キャプチャして1080p画像に変換"""
         try:
+            if self.sct is None:
+                return
             monitor = self.capture_box if self.capture_box else self.sct.monitors[1]
             screenshot = self.sct.grab(monitor)
             self.img = np.array(screenshot)
@@ -473,7 +540,21 @@ class AegisAnalyzer(Pokebot):
             )
             hypotheses[hypothesis] = 1.0
 
-        return self.belief_state._prune_and_normalize(hypotheses)
+        # 【堅牢化補正】self.belief_state が None の場合の安全策
+        belief_state = self.belief_state
+        if belief_state is None:
+            belief_state = PokemonBeliefState.__new__(PokemonBeliefState)
+            belief_state.usage_db = None
+            belief_state.max_hypotheses = 50
+            belief_state.min_probability = 0.005
+
+        if hasattr(belief_state, '_prune_and_normalize'):
+            return belief_state._prune_and_normalize(hypotheses)
+        else:
+            total = sum(h for h in hypotheses.values())
+            for h in hypotheses:
+                hypotheses[h] /= (total if total > 0 else 1.0)
+            return hypotheses
 
     def translate_buffer_to_observation(self, dict_event: Dict[str, Any]) -> Optional[Observation]:
         """OCRバッファをベイズ観測イベントに変換"""
@@ -755,6 +836,30 @@ class AegisAnalyzer(Pokebot):
 if __name__ == "__main__":
     # シミュレータの初期化
     Pokemon.init(season=22)
+
+    # --------------------------------============================
+    # 【Aegisの根幹：キングシールド表記揺れ自動同期パッチ】
+    # データベース内の本物の 'キングズシールド' データを 'キングシールド' として再マッピングする
+    # =========================================================================
+    for target_alias in ['キングズシールド', 'キング・シールド']:
+        if target_alias in Pokemon.all_moves:
+            Pokemon.all_moves['キングシールド'] = Pokemon.all_moves[target_alias]
+            print(
+                f"ℹ️ [Aegis Patch] 表記揺れ '{target_alias}' を本物の 'キングシールド' データとしてエイリアスマッピングしました。")
+            break
+
+    # =========================================================================
+    # 【図鑑補正パッチ】Pokemon.zukan における 'ギルガルド' のキー欠損補正
+    # =========================================================================
+    if hasattr(Pokemon, 'zukan'):
+        if 'ギルガルド' not in Pokemon.zukan:
+            for target_key in ['ギルガルド(シールド)', 'ギルガルド（シールド）']:
+                if target_key in Pokemon.zukan:
+                    # データをディープコピーして 'ギルガルド' キーを生成
+                    Pokemon.zukan['ギルガルド'] = deepcopy(Pokemon.zukan[target_key])
+                    Pokemon.zukan['ギルガルド']['display_name'] = 'ギルガルド'
+                    print(f"ℹ️ [Patch] Pokemon.zukan に '{target_key}' から 'ギルガルド' のエイリアスを生成しました。")
+                    break
 
     # 画面キャプチャのターゲット設定（Noneの場合は全画面監視）
     my_box = None

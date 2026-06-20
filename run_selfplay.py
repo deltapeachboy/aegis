@@ -6,7 +6,7 @@ import json
 import io
 
 # =========================================================================
-# 0. 【File Path Redirect & Aegislash Data Patch】
+# 0. 【File Path Redirect & Aegislash Data Patch (絶対位置対応版)】
 # シミュレータの技リストロード時に、自動で mb_learnset.json を参照し、
 # かつギルガルド各フォルムに技データを動的同期（注入）するパッチ
 # =========================================================================
@@ -16,9 +16,11 @@ _original_open = builtins.open
 def patched_open(file, *args, **kwargs):
     # 'learnset.json' を含むファイルアクセスを検知
     if isinstance(file, str) and "learnset.json" in file:
-        custom_path = os.path.join("battle_data", "mb_learnset.json")
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        custom_path = os.path.join(base_dir, "battle_data", "mb_learnset.json")
+
         if os.path.exists(custom_path):
-            print(f"ℹ️ [Redirect & Patch] '{file}' へのアクセスを検知。ギルガルドの技データを補正してロードします。")
+            print(f"ℹ️ [Redirect & Patch] '{file}' ➔ '{custom_path}' へ強制リダイレクトロードします。")
 
             # 1. 実際に mb_learnset.json をロード
             with _original_open(custom_path, "r", encoding="utf-8") as f:
@@ -81,7 +83,6 @@ except ImportError:
     try:
         from src.hypothesis.item_belief_state import Observation, ObservationType
     except ImportError:
-        # クラスが定義されていない場合のフォールバック定義
         class ObservationType:
             MOVE_USED = "move_used"
             ITEM_REVEALED = "item_revealed"
@@ -111,8 +112,34 @@ def generate_random_team(builder: AegisTeamBuilder) -> list:
         p.item = team_dict[s]['item']
         p.Ttype = team_dict[s]['Ttype']
         p.moves = team_dict[s]['moves']
-        p.indiv = team_dict[s]['indiv']
-        p.effort = team_dict[s]['effort']
+
+        # 辞書型・リスト型の双方に自動適合させる二重保険
+        ind_data = team_dict[s].get('indiv', [31] * 6)
+        if isinstance(ind_data, dict):
+            p.indiv = [
+                ind_data.get("H", 31),
+                ind_data.get("A", 31),
+                ind_data.get("B", 31),
+                ind_data.get("C", 31),
+                ind_data.get("D", 31),
+                ind_data.get("S", 31)
+            ]
+        else:
+            p.indiv = ind_data
+
+        eff_data = team_dict[s].get('effort', [0] * 6)
+        if isinstance(eff_data, dict):
+            p.effort = [
+                eff_data.get("H", 0),
+                eff_data.get("A", 0),
+                eff_data.get("B", 0),
+                eff_data.get("C", 0),
+                eff_data.get("D", 0),
+                eff_data.get("S", 0)
+            ]
+        else:
+            p.effort = eff_data
+
         p.update_status()
         selected_team.append(p)
     return selected_team
@@ -264,11 +291,21 @@ if __name__ == "__main__":
     Pokemon.init(season=22)
 
     # =========================================================================
+    # 【Aegisの根幹：キングシールド表記揺れ自動同期パッチ】
+    # データベース内の本物の 'キングズシールド' データを 'キングシールド' として再マッピングする
+    # =========================================================================
+    for target_alias in ['キングズシールド', 'キング・シールド']:
+        if target_alias in Pokemon.all_moves:
+            Pokemon.all_moves['キングシールド'] = Pokemon.all_moves[target_alias]
+            print(
+                f"ℹ️ [Aegis Patch] 表記揺れ '{target_alias}' を本物の 'キングシールド' データとしてエイリアスマッピングしました。")
+            break
+
+    # =========================================================================
     # 【図鑑補正パッチ】Pokemon.zukan における 'ギルガルド' のキー欠損補正
     # =========================================================================
     if hasattr(Pokemon, 'zukan'):
         if 'ギルガルド' not in Pokemon.zukan:
-            # ギルガルド(シールド) または ギルガルド（シールド）（全角半角の表記揺れ対応）を探す
             for target_key in ['ギルガルド(シールド)', 'ギルガルド（シールド）']:
                 if target_key in Pokemon.zukan:
                     # データをディープコピーして 'ギルガルド' キーを生成
@@ -289,10 +326,8 @@ if __name__ == "__main__":
         from src.rebel.belief_state import PokemonBeliefState
 
         try:
-            # 引数なしでの初期化を試行
             analyzer.belief_state = PokemonBeliefState()
         except Exception:
-            # 統計DB等の不整合で失敗した場合は、__new__ で空オブジェクトを作って代入
             dummy_belief = PokemonBeliefState.__new__(PokemonBeliefState)
             dummy_belief.usage_db = None
             dummy_belief.max_hypotheses = 30
@@ -304,7 +339,7 @@ if __name__ == "__main__":
     cfr_solver = analyzer.cfr_solver
 
     # 2. 自動自己対戦ループの設定
-    num_matches = 10  # まずは10試合実行
+    num_matches = 10
     output_path = "log/selfplay_dataset.jsonl"
     os.makedirs("log", exist_ok=True)
 
@@ -320,7 +355,7 @@ if __name__ == "__main__":
             print(f"\n--- ［試合 {match_idx}/{num_matches}］をシミュレート中 ---")
 
             try:
-                # 自己対戦を実行 (analyzer インスタンスを引数に追加)
+                # 自己対戦を実行
                 match_data = run_single_selfplay_match(
                     match_id=match_idx,
                     builder=builder,
@@ -329,7 +364,6 @@ if __name__ == "__main__":
                     analyzer=analyzer
                 )
 
-                # JSONL形式で1行ずつ学習データとして保存
                 f_out.write(json.dumps(match_data, ensure_ascii=False) + "\n")
                 print(f"➔ 試合 {match_idx} の対戦ログを '{output_path}' に保存完了。")
             except Exception as e:
