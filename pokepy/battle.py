@@ -3872,7 +3872,9 @@ class Battle:
                     )
                     if p_obs is not None:
                         p_obs.add_move(move)
-                        p_obs.pp[p_obs.moves.index(move)] = self.pokemon[player].pp[ind]
+                        # ➔ 実際に追加されていることを確認した上でPPを同期する（クラッシュ安全対策）
+                        if move in p_obs.moves:
+                            p_obs.pp[p_obs.moves.index(move)] = self.pokemon[player].pp[ind]
 
                 # ねごとによる技の変更
                 if move == "ねごと":

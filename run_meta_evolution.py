@@ -365,5 +365,73 @@ def run_evolution_loop(total_generations: int = 100, matches_per_gen: int = 40):
     print("\n🏁 100世代すべての進化学習サイクルが正常に完了しました。")
 
 
+# =========================================================================
+# 5. エントリーポイント（X/Y分岐メガシンカ・曖昧検索完全対応パッチ） [2]
+# =========================================================================
 if __name__ == "__main__":
+    # 1. シミュレータの初期化
+    Pokemon.init(season=22)
+
+    # -------------------------------------------------------------------------
+    # A. 【Aegis 曖昧検索パッチ（X/Y分岐対応補強版）】
+    # 「メガ」および末尾の「X」「Y」「全角のＸ」「全角のＹ」をすべて除去してベース名にする [2]
+    # -------------------------------------------------------------------------
+    original_find = Pokemon.find
+
+
+    @classmethod
+    def patched_find(cls, pokemon_list, name=None, display_name=None):
+        res = original_find(pokemon_list, name=name, display_name=display_name)
+        if res is not None:
+            return res
+
+        if name:
+            base_name = name.replace("メガ", "").rstrip("XYＸＹ ").split("(")[0]
+
+            for p in pokemon_list:
+                p_base = p.name.replace("メガ", "").rstrip("XYＸＹ ").split("(")[0]
+                if p_base == base_name or p.display_name == base_name:
+                    return p
+
+        if pokemon_list:
+            return pokemon_list[0]
+
+        return None
+
+
+    Pokemon.find = patched_find
+
+    # -------------------------------------------------------------------------
+    # B. 【Battle.get_mega_name のX/Y分岐メガシンカ対応パッチ】 [2]
+    # -------------------------------------------------------------------------
+    original_get_mega_name = Battle.get_mega_name
+
+
+    def patched_get_mega_name(self, p: Pokemon) -> str:
+        if not p or not p.item:
+            return ""
+
+        if p.name == "リザードン":
+            if "X" in p.item or "Ｘ" in p.item: return "メガリザードンX"
+            if "Y" in p.item or "Ｙ" in p.item: return "メガリザードンY"
+        elif p.name == "ミュウツー":
+            if "X" in p.item or "Ｘ" in p.item: return "メガミュウツーX"
+            if "Y" in p.item or "Ｙ" in p.item: return "メガミュウツーY"
+        elif p.name == "ライチュウ":
+            if "X" in p.item or "Ｘ" in p.item: return "メガライチュウX"
+            if "Y" in p.item or "Ｙ" in p.item: return "メガライチュウY"
+
+        return original_get_mega_name(self, p)
+
+
+    Battle.get_mega_name = patched_get_mega_name
+    # -------------------------------------------------------------------------
+
+    # ギルガルド・キングシールドの表記揺れ自動同期
+    for target_alias in ['キングズシールド', 'キング・シールド', 'キングズ・シールド']:
+        if target_alias in Pokemon.all_moves:
+            Pokemon.all_moves['キングシールド'] = Pokemon.all_moves[target_alias]
+            break
+
+    # 進化サイクルの始動（1世代40試合、100世代サイクルを完全自動実行します）
     run_evolution_loop(total_generations=100, matches_per_gen=40)

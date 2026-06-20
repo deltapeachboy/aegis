@@ -3,6 +3,7 @@ import types
 from typing import Optional, List, Dict, Any, Set, Tuple
 from copy import deepcopy
 import builtins
+import random
 import os
 import json
 import io
@@ -84,6 +85,11 @@ from src.rebel.belief_state import PokemonBeliefState, ObservationType, Observat
 from src.rebel.public_state import PublicBeliefState
 from src.rebel.cfr_solver import ReBeLSolver, CFRConfig
 from src.llm.state_representation import battle_to_llm_state
+
+# =========================================================================
+# 【テラスタル一時的完全禁止パッチ】
+# =========================================================================
+Battle.can_terastal = lambda self, player: False
 
 
 class AegisTeamBuilder:
@@ -192,21 +198,33 @@ class AegisTeamBuilder:
             if best_candidate:
                 team_members.append(best_candidate)
 
-        # 3. 構築メンバーへのアイテムの最適配分（Item Clauseの遵守）
-        standard_items = ["ちからのハチマキ", "いのちのたま", "たべのこし", "とつげきチョッキ", "こだわりスカーフ",
-                          "きあいのタスキ"]
+        # -------------------------------------------------------------------------
+        # 3. 【進化的 Item Clause & 50%分岐メガシンカ配分（mb_items.txt 準拠）】 [1, 2]
+        # -------------------------------------------------------------------------
         assigned_items = {}
+
+        # mb_items の中から、メガストーン（"ナイト"を含むもの）と通常アイテムを完全に分離 [2]
+        mega_stones_in_pool = {item for item in self.mb_items if "ナイト" in item}
+        normal_items_pool = list(self.mb_items - mega_stones_in_pool)
+
+        # 重複を避けてランダムに配分するため、通常アイテムプールをシャッフル [2]
+        random.shuffle(normal_items_pool)
+        normal_item_idx = 0
 
         for member in team_members:
             # メガシンカ可能なポケモンかチェック
             mega_stone_name = member.split("(")[0] + "ナイト"
-            if mega_stone_name in self.mb_items:
+
+            # ➔ メガ枠でも50%の確率で通常アイテム（メガシンカしない選択肢）を持たせる
+            if mega_stone_name in self.mb_items and random.random() < 0.5:
                 assigned_items[member] = mega_stone_name
             else:
-                # 汎用アイテムから重複を避けて割り当て
-                for item in standard_items:
-                    if item not in assigned_items.values() and item in self.mb_items:
-                        assigned_items[member] = item
+                # 通常アイテムから重複を避けて割り当て [2]
+                while normal_item_idx < len(normal_items_pool):
+                    cand_item = normal_items_pool[normal_item_idx]
+                    normal_item_idx += 1
+                    if cand_item not in assigned_items.values():
+                        assigned_items[member] = cand_item
                         break
                 else:
                     assigned_items[member] = ""
@@ -214,28 +232,51 @@ class AegisTeamBuilder:
         # 4. 完成した6体のステータス、技、努力値を構築
         generated_party = {}
         for i, name in enumerate(team_members):
-            base = Pokemon.zukan[name]["base"]
-            is_phy = base[1] >= base[3]  # A >= C
-            is_fast = base[5] >= 90
+            zukan_entry = Pokemon.zukan[name]
+            base = zukan_entry["base"]
 
-            nature = "いじっぱり" if is_phy else "ひかえめ"
-            if is_fast:
-                nature = "ようき" if is_phy else "おくびょう"
+            # ➔ 性格（Nature）の完全ランダム選択
+            nature = random.choice(
+                ["いじっぱり", "ひかえめ", "ようき", "おくびょう", "わんぱく", "しんちょう", "おだやか", "ずぶとい"])
 
-            effort = [0, 252, 0, 0, 0, 252] if is_phy else [252, 0, 0, 252, 0, 0]
+            # ➔ 努力値（EV）の 50%極振り / 50%完全ランダム自動割り振り
+            if random.random() < 0.5:
+                # 50%：極振りモード（ランダムに2つのステータスを252にし、残りのどこかに4を振る）
+                effort = [0] * 6
+                all_indices = [0, 1, 2, 3, 4, 5]
+                max_two = random.sample(all_indices, 2)
+                for idx in max_two:
+                    effort[idx] = 252
+                remaining = [idx for idx in all_indices if idx not in max_two]
+                last_four = random.choice(remaining)
+                effort[last_four] = 4
+            else:
+                # 50%：完全ランダム（合計508、上限252、4の倍数分配）
+                effort = [0] * 6
+                total_units = 127  # 127 * 4 = 508
+                for _ in range(total_units):
+                    valid_indices = [idx for idx in range(6) if effort[idx] < 252]
+                    if not valid_indices:
+                        break
+                    idx = random.choice(valid_indices)
+                    effort[idx] += 4
 
-            moves = self.learnsets.get(name, ["テラバースト"])[:4]
-            while len(moves) < 4:
-                moves.append("ままもる" if "ままもる" in self.learnsets.get(name, []) else "まもる")
+            # ➔ 技のランダム選択（4枠未満ならパディングしない）
+            learnable = self.learnsets.get(name, ["テラバースト"])
+            moves = random.sample(learnable, min(4, len(learnable)))
+
+            # ➔ 特性（Ability）の完全ランダム選択
+            abilities = zukan_entry.get("ability", ["とくせいなし"])
+            ability = random.choice(abilities) if abilities else "とくせいなし"
 
             generated_party[str(i)] = {
                 "name": name,
                 "sex": 1 if i % 2 == 0 else -1,
                 "level": 50,
                 "nature": nature,
-                "ability": Pokemon.zukan[name]["ability"][0],
-                "item": assigned_items[name],
-                "Ttype": Pokemon.zukan[name]["type"][0],
+                "ability": ability,
+                "item": assigned_items.get(name, ""),
+                "Ttype": zukan_entry["type"][0],
                 "moves": moves,
                 "indiv": [31, 31, 31, 31, 31, 31],
                 "effort": effort
