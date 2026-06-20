@@ -1,0 +1,115 @@
+<!-- バトル結果 -->
+<div class="fade-in">
+    <div class="max-w-2xl mx-auto">
+        {% if state.winner == 0 %}
+        <!-- プレイヤー勝利 -->
+        <div class="bg-gradient-to-br from-green-400 to-blue-500 rounded-lg p-8 text-center text-white shadow-xl">
+            <div class="text-6xl mb-4">🏆</div>
+            <h2 class="text-4xl font-bold mb-4">勝利！</h2>
+            <p class="text-xl opacity-90 mb-6">
+                {% if state.ai_surrendered %}
+                AIが勝ち目なしと判断し、降参しました！
+                {% else %}
+                おめでとうございます！AIに勝利しました！
+                {% endif %}
+            </p>
+            <div class="bg-white/20 rounded-lg p-4 mb-6">
+                <div class="text-lg">ターン数: {{ state.turn }}</div>
+                {% if state.ai_surrendered %}
+                <div class="text-sm mt-2 opacity-75">AIが降参</div>
+                {% endif %}
+            </div>
+            <a href="/setup"
+               class="inline-block bg-white text-green-600 font-bold py-3 px-8 rounded-lg text-lg transition-colors hover:bg-gray-100">
+                もう一度バトル
+            </a>
+        </div>
+        {% else %}
+        <!-- AI勝利（プレイヤー敗北） -->
+        <div class="bg-gradient-to-br from-gray-600 to-gray-800 rounded-lg p-8 text-center text-white shadow-xl">
+            <div class="text-6xl mb-4">💀</div>
+            <h2 class="text-4xl font-bold mb-4">敗北...</h2>
+            <p class="text-xl opacity-90 mb-6">
+                AIに負けてしまいました...
+            </p>
+            <div class="bg-white/20 rounded-lg p-4 mb-6">
+                <div class="text-lg">ターン数: {{ state.turn }}</div>
+            </div>
+            <a href="/setup"
+               class="inline-block bg-white text-gray-700 font-bold py-3 px-8 rounded-lg text-lg transition-colors hover:bg-gray-100">
+                リベンジする
+            </a>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- エクスポートボタン -->
+    <div class="max-w-2xl mx-auto mt-4 flex justify-center gap-3">
+        <a href="/api/battle/{{ session_id }}/export?format=json"
+           download
+           class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg text-sm transition-colors flex items-center gap-2">
+            <span>📥</span>
+            <span>JSON形式でエクスポート</span>
+        </a>
+        <a href="/api/battle/{{ session_id }}/export?format=txt"
+           download
+           class="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm transition-colors flex items-center gap-2">
+            <span>📄</span>
+            <span>テキスト形式でエクスポート</span>
+        </a>
+    </div>
+
+    <!-- バトルサマリー -->
+    <div class="max-w-4xl mx-auto mt-8">
+        <div class="bg-white rounded-lg shadow p-6">
+            <h3 class="font-bold text-lg mb-4">バトルサマリー</h3>
+            <div class="grid md:grid-cols-2 gap-6">
+                <!-- プレイヤーチーム -->
+                <div>
+                    <h4 class="text-sm text-blue-600 font-bold mb-2">あなたのチーム</h4>
+                    <div class="space-y-2">
+                        {% if state.player_active %}
+                        <div class="flex items-center justify-between bg-gray-50 rounded p-2">
+                            <span>{{ state.player_active.name }}</span>
+                            <span class="text-sm {% if state.player_active.hp_percent > 0 %}text-green-600{% else %}text-red-600{% endif %}">
+                                {{ state.player_active.hp_percent }}%
+                            </span>
+                        </div>
+                        {% endif %}
+                        {% for pokemon in state.player_bench %}
+                        <div class="flex items-center justify-between bg-gray-50 rounded p-2">
+                            <span>{{ pokemon.name }}</span>
+                            <span class="text-sm {% if pokemon.hp_percent > 0 %}text-green-600{% else %}text-red-600{% endif %}">
+                                {{ pokemon.hp_percent }}%
+                            </span>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <!-- 相手チーム -->
+                <div>
+                    <h4 class="text-sm text-red-600 font-bold mb-2">相手のチーム</h4>
+                    <div class="space-y-2">
+                        {% if state.opponent_active %}
+                        <div class="flex items-center justify-between bg-gray-50 rounded p-2">
+                            <span>{{ state.opponent_active.name }}</span>
+                            <span class="text-sm {% if state.opponent_active.hp_percent > 0 %}text-green-600{% else %}text-red-600{% endif %}">
+                                {{ state.opponent_active.hp_percent }}%
+                            </span>
+                        </div>
+                        {% endif %}
+                        {% for pokemon in state.opponent_bench %}
+                        <div class="flex items-center justify-between bg-gray-50 rounded p-2">
+                            <span>{{ pokemon.name }}</span>
+                            <span class="text-sm {% if pokemon.hp_percent > 0 %}text-green-600{% else %}text-red-600{% endif %}">
+                                {{ pokemon.hp_percent }}%
+                            </span>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

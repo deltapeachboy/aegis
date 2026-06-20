@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Pokemon Battle{% endblock %}</title>
+
+    <!-- Tailwind CSS (CDN) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- HTMX -->
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script>
+        // HTMXでスワップされたコンテンツ内のscriptタグを実行可能にする
+        htmx.config.allowScriptTags = true;
+    </script>
+
+    <!-- Custom styles -->
+    <link rel="stylesheet" href="/static/css/styles.css">
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        pokemon: {
+                            red: '#E3350D',
+                            blue: '#006CB5',
+                            yellow: '#FFCC00',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    {% block head %}{% endblock %}
+</head>
+<body class="bg-gradient-to-b from-blue-50 to-indigo-100 min-h-screen">
+    <!-- Loading indicator -->
+    <div id="loading" class="htmx-indicator fixed top-4 right-4 z-50">
+        <div class="bg-white rounded-lg shadow-lg px-4 py-2 flex items-center gap-2">
+            <svg class="animate-spin h-5 w-5 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <span class="text-gray-700">処理中...</span>
+        </div>
+    </div>
+
+    <!-- Header -->
+    <header class="bg-white shadow-sm">
+        <div class="container mx-auto px-4 py-4">
+            <h1 class="text-2xl font-bold text-gray-900">
+                <a href="/" class="hover:text-blue-600 transition-colors">
+                    Pokemon Battle vs ReBeL AI
+                </a>
+            </h1>
+        </div>
+    </header>
+
+    <!-- Main content -->
+    <main class="container mx-auto px-4 py-8">
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- Footer -->
+    <footer class="text-center text-gray-500 text-sm py-4">
+        <p>Pokemon Battle Simulator - FastAPI + HTMX</p>
+    </footer>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,20 @@
+<!-- プレイヤーパーティ表示 -->
+<div class="grid grid-cols-2 md:grid-cols-3 gap-3">
+    {% for pokemon in party %}
+    <div class="bg-gray-50 rounded-lg p-3 pokemon-card">
+        <div class="font-bold text-gray-800 mb-1">{{ pokemon.name }}</div>
+        <div class="text-xs text-gray-500 space-y-1">
+            <div>特性: {{ pokemon.ability }}</div>
+            <div>持ち物: {{ pokemon.item }}</div>
+            <div>テラス: {{ pokemon.Ttype }}</div>
+        </div>
+        <div class="mt-2 flex flex-wrap gap-1">
+            {% for move in pokemon.moves %}
+            <span class="text-xs bg-white text-gray-600 px-1.5 py-0.5 rounded border">
+                {{ move }}
+            </span>
+            {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+</div>

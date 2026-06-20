@@ -1,0 +1,271 @@
+<!-- バトルフィールド -->
+<div class="fade-in">
+    <!-- ターン表示 & 操作バー -->
+    <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center gap-4">
+            <span class="bg-gray-100 text-gray-800 px-4 py-2 rounded-lg font-bold">
+                ターン {{ state.turn }}
+            </span>
+
+            <!-- フィールド状態 -->
+            {% if state.field.weather %}
+            <span class="bg-yellow-100 text-yellow-800 px-3 py-1 rounded text-sm">
+                {{ state.field.weather }}
+            </span>
+            {% endif %}
+            {% if state.field.terrain %}
+            <span class="bg-green-100 text-green-800 px-3 py-1 rounded text-sm">
+                {{ state.field.terrain }}
+            </span>
+            {% endif %}
+            {% if state.field.trick_room %}
+            <span class="bg-purple-100 text-purple-800 px-3 py-1 rounded text-sm">
+                トリックルーム
+            </span>
+            {% endif %}
+        </div>
+
+        <div class="flex items-center gap-2">
+            <!-- AI分析トグル -->
+            {% if state.ai_mode == "rebel" %}
+            {% if state.ai_analysis_always_on %}
+            <!-- 常時ONモード：ボタンは常にON状態 -->
+            <span class="bg-purple-700 text-white px-3 py-2 rounded-lg text-sm flex items-center gap-1">
+                <span>🤖</span>
+                <span>AI分析 常時ON</span>
+            </span>
+            {% else %}
+            <!-- 通常モード：トグル可能 -->
+            <button id="ai-analysis-toggle"
+                    onclick="toggleAiAnalysis('{{ session_id }}')"
+                    class="bg-purple-500 hover:bg-purple-600 text-white px-3 py-2 rounded-lg text-sm transition-colors flex items-center gap-1">
+                <span>🤖</span>
+                <span id="ai-toggle-text">AI分析</span>
+            </button>
+            {% endif %}
+            {% endif %}
+
+            <button hx-post="/api/battle/{{ session_id }}/surrender"
+                    hx-target="#battle-container"
+                    hx-confirm="本当に降参しますか？"
+                    hx-indicator="#loading"
+                    class="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg text-sm transition-colors">
+                降参
+            </button>
+        </div>
+    </div>
+
+    <!-- メインバトルエリア -->
+    <div class="grid lg:grid-cols-3 gap-4">
+        <!-- 左: プレイヤー側 -->
+        <div class="space-y-4">
+            <div class="bg-white rounded-lg shadow p-4">
+                <h3 class="text-sm text-gray-500 mb-3">あなたのポケモン</h3>
+
+                <!-- アクティブポケモン -->
+                {% if state.player_active %}
+                {% set pokemon = state.player_active %}
+                {% set is_active = True %}
+                {% set is_player = True %}
+                {% include "components/pokemon_card.html" %}
+                {% endif %}
+
+                <!-- ベンチ -->
+                <div class="grid grid-cols-2 gap-2 mt-3">
+                    {% for bench_pokemon in state.player_bench %}
+                    {% set pokemon = bench_pokemon %}
+                    {% set is_active = False %}
+                    {% set is_player = True %}
+                    {% include "components/pokemon_card.html" %}
+                    {% endfor %}
+                </div>
+            </div>
+
+            <!-- プレイヤー側フィールド効果 -->
+            {% if state.field.player_side %}
+            {% set side = state.field.player_side %}
+            {% set label = "味方" %}
+            {% include "components/field_effects.html" %}
+            {% endif %}
+        </div>
+
+        <!-- 中央: アクション & ログ -->
+        <div class="space-y-4">
+            <!-- アクションパネル -->
+            {% if state.available_actions %}
+            {% include "components/action_panel.html" %}
+            {% endif %}
+
+            <!-- バトルログ -->
+            {% include "components/battle_log.html" %}
+        </div>
+
+        <!-- 右: 相手側 -->
+        <div class="space-y-4">
+            <div class="bg-white rounded-lg shadow p-4">
+                <h3 class="text-sm text-gray-500 mb-3">相手のポケモン</h3>
+
+                <!-- アクティブポケモン -->
+                {% if state.opponent_active %}
+                {% set pokemon = state.opponent_active %}
+                {% set is_active = True %}
+                {% set is_player = False %}
+                {% include "components/pokemon_card.html" %}
+                {% endif %}
+
+                <!-- 控えポケモン（観測済み情報を表示） -->
+                <div class="mt-3">
+                    <div class="text-xs text-gray-500 mb-2">
+                        控え ({{ state.opponent_bench_total }}匹)
+                        {% if state.opponent_bench_unknown > 0 %}
+                        <span class="text-gray-400">- {{ state.opponent_bench_unknown }}匹未確認</span>
+                        {% endif %}
+                    </div>
+                    {% if state.opponent_bench %}
+                    <div class="grid grid-cols-2 gap-2">
+                        {% for bench_pokemon in state.opponent_bench %}
+                        <div class="bg-gray-50 rounded p-2 text-xs">
+                            <div class="font-medium text-gray-700">{{ bench_pokemon.name }}</div>
+                            <div class="mt-1">
+                                <div class="w-full bg-gray-200 rounded-full h-1.5">
+                                    <div class="bg-green-500 h-1.5 rounded-full" style="width: {{ bench_pokemon.hp_percent }}%"></div>
+                                </div>
+                                <div class="text-gray-400 text-[10px] mt-0.5">HP: {{ bench_pokemon.hp_percent }}%</div>
+                            </div>
+                            {% if bench_pokemon.item %}
+                            <div class="text-gray-500 mt-1">📦 {{ bench_pokemon.item }}</div>
+                            {% endif %}
+                            {% if bench_pokemon.ability %}
+                            <div class="text-gray-500">⚡ {{ bench_pokemon.ability }}</div>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                        {% for _ in range(state.opponent_bench_unknown) %}
+                        <div class="bg-gray-100 rounded p-2 text-xs border-2 border-dashed border-gray-300">
+                            <div class="font-medium text-gray-400">???</div>
+                            <div class="mt-1 text-gray-400 text-[10px]">未確認</div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% elif state.opponent_bench_unknown > 0 %}
+                    <div class="grid grid-cols-2 gap-2">
+                        {% for _ in range(state.opponent_bench_unknown) %}
+                        <div class="bg-gray-100 rounded p-2 text-xs border-2 border-dashed border-gray-300">
+                            <div class="font-medium text-gray-400">???</div>
+                            <div class="mt-1 text-gray-400 text-[10px]">未確認</div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- 相手側フィールド効果 -->
+            {% if state.field.opponent_side %}
+            {% set side = state.field.opponent_side %}
+            {% set label = "相手" %}
+            {% include "components/field_effects.html" %}
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- AI分析パネル（トグルで表示/非表示、常時ONの場合は最初から表示） -->
+    {% if state.ai_mode == "rebel" %}
+    <div id="ai-analysis-panel" class="mt-4 {% if not state.ai_analysis_always_on %}hidden{% endif %}">
+        <div id="ai-analysis-content">
+            <!-- AI分析データがここに読み込まれる -->
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<!-- AI分析トグル用JavaScript -->
+<script>
+    (function() {
+        const AI_ANALYSIS_ALWAYS_ON = {{ state.ai_analysis_always_on | tojson }};
+        const CURRENT_SESSION_ID = '{{ session_id }}';
+
+        // グローバル関数として定義（ボタンのonclickから呼ばれる）
+        window.loadAiAnalysis = function(sessionId) {
+            const content = document.getElementById('ai-analysis-content');
+            if (!content) return;
+
+            // ローディング表示
+            content.innerHTML = '<div class="text-gray-500 text-sm">分析中...</div>';
+
+            fetch(`/api/battle/${sessionId}/ai-analysis`)
+                .then(response => response.text())
+                .then(html => {
+                    const contentEl = document.getElementById('ai-analysis-content');
+                    if (contentEl) contentEl.innerHTML = html;
+                })
+                .catch(err => {
+                    const contentEl = document.getElementById('ai-analysis-content');
+                    if (contentEl) contentEl.innerHTML = '<div class="text-red-500 text-sm">分析データの取得に失敗しました</div>';
+                });
+        };
+
+        window.toggleAiAnalysis = function(sessionId, forceState) {
+            forceState = forceState !== undefined ? forceState : null;
+            const panel = document.getElementById('ai-analysis-panel');
+            const toggleText = document.getElementById('ai-toggle-text');
+            const toggleBtn = document.getElementById('ai-analysis-toggle');
+
+            if (!panel) return;
+
+            // 常時ONモードの場合はトグル不可
+            if (AI_ANALYSIS_ALWAYS_ON) {
+                window.loadAiAnalysis(sessionId);
+                return;
+            }
+
+            if (!toggleBtn) return;
+
+            let visible = sessionStorage.getItem(`ai_analysis_${sessionId}`) === 'true';
+            if (forceState !== null) {
+                visible = forceState;
+            } else {
+                visible = !visible;
+            }
+
+            // 状態を保存
+            sessionStorage.setItem(`ai_analysis_${sessionId}`, visible);
+
+            if (visible) {
+                panel.classList.remove('hidden');
+                toggleBtn.classList.remove('bg-purple-500', 'hover:bg-purple-600');
+                toggleBtn.classList.add('bg-purple-700', 'hover:bg-purple-800');
+                if (toggleText) toggleText.textContent = 'AI分析 ON';
+                window.loadAiAnalysis(sessionId);
+            } else {
+                panel.classList.add('hidden');
+                toggleBtn.classList.remove('bg-purple-700', 'hover:bg-purple-800');
+                toggleBtn.classList.add('bg-purple-500', 'hover:bg-purple-600');
+                if (toggleText) toggleText.textContent = 'AI分析';
+            }
+        };
+
+        // AI分析の初期化
+        function initAiAnalysis() {
+            const sessionId = CURRENT_SESSION_ID;
+            const panel = document.getElementById('ai-analysis-panel');
+
+            if (!panel) return;
+
+            if (AI_ANALYSIS_ALWAYS_ON) {
+                // 常時ONモード
+                panel.classList.remove('hidden');
+                window.loadAiAnalysis(sessionId);
+            } else {
+                // 通常モード：セッションストレージから復元
+                const wasVisible = sessionStorage.getItem(`ai_analysis_${sessionId}`);
+                if (wasVisible === 'true') {
+                    window.toggleAiAnalysis(sessionId, true);
+                }
+            }
+        }
+
+        // 即座に実行
+        initAiAnalysis();
+    })();
+</script>

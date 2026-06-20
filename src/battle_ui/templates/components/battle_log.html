@@ -1,0 +1,25 @@
+<!-- バトルログ -->
+<div class="bg-white rounded-lg shadow p-4">
+    <h3 class="text-sm text-gray-500 mb-3">バトルログ</h3>
+    <div class="battle-log bg-gray-50 rounded-lg p-3 text-sm" id="battle-log-content">
+        {% if state.log %}
+        {% set current_turn = namespace(value=-1) %}
+        {% for entry in state.log|reverse %}
+        {% if entry.turn != current_turn.value %}
+        {% set current_turn.value = entry.turn %}
+        <div class="py-1 text-gray-500 text-xs font-bold border-b border-gray-200 mt-2 first:mt-0">
+            ターン {{ entry.turn }}
+        </div>
+        {% endif %}
+        <div class="py-1 border-b border-gray-100 last:border-0
+                    {% if entry.player == 0 %}text-blue-700{% else %}text-red-700{% endif %}">
+            {{ entry.message }}
+        </div>
+        {% endfor %}
+        {% else %}
+        <div class="text-gray-400 text-center py-4">
+            バトル開始！
+        </div>
+        {% endif %}
+    </div>
+</div>

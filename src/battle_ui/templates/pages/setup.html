@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+
+{% block title %}Pokemon Battle - Setup{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto">
+    <h2 class="text-2xl font-bold text-gray-800 mb-6">対戦設定</h2>
+
+    <form hx-post="/api/battle/create"
+          hx-indicator="#loading"
+          class="space-y-6">
+
+        <!-- AIモード選択 -->
+        <div class="bg-white rounded-lg shadow p-6">
+            <h3 class="font-bold text-lg mb-4">AIモード</h3>
+            <div class="space-y-3">
+                <label class="flex items-center gap-3 cursor-pointer">
+                    <input type="radio" name="ai_mode" value="random" checked
+                           class="w-4 h-4 text-blue-600"
+                           onchange="toggleCheckpointSelector()">
+                    <div>
+                        <span class="font-medium">ランダム</span>
+                        <span class="text-sm text-gray-500 ml-2">ランダムに行動を選択</span>
+                    </div>
+                </label>
+                <label class="flex items-center gap-3 cursor-pointer">
+                    <input type="radio" name="ai_mode" value="rebel"
+                           class="w-4 h-4 text-blue-600"
+                           onchange="toggleCheckpointSelector()">
+                    <div>
+                        <span class="font-medium">ReBeL AI</span>
+                        <span class="text-sm text-gray-500 ml-2">学習済みモデルを使用</span>
+                    </div>
+                </label>
+            </div>
+
+            <!-- チェックポイント選択（ReBeL選択時のみ表示） -->
+            <div id="checkpoint-selector" class="mt-4 hidden">
+                <label class="block text-sm font-medium text-gray-700 mb-2">
+                    チェックポイント
+                </label>
+                <div hx-get="/api/checkpoints"
+                     hx-trigger="load"
+                     hx-indicator="#loading">
+                    <div class="text-gray-500">読み込み中...</div>
+                </div>
+            </div>
+
+            <!-- AI分析オプション（ReBeL選択時のみ表示） -->
+            <div id="ai-analysis-option" class="mt-4 hidden">
+                <label class="flex items-center gap-3 cursor-pointer p-3 bg-purple-50 rounded-lg border border-purple-200">
+                    <input type="checkbox" name="ai_analysis_always_on" value="true"
+                           class="w-4 h-4 text-purple-600 rounded">
+                    <div>
+                        <span class="font-medium text-purple-800">AI分析を常に表示</span>
+                        <p class="text-sm text-purple-600">AIの思考（行動選択確率・推定勝率）を常に表示します</p>
+                    </div>
+                </label>
+            </div>
+        </div>
+
+        <!-- トレーナー選択 -->
+        <div class="bg-white rounded-lg shadow p-6">
+            <h3 class="font-bold text-lg mb-4">対戦相手（AIトレーナー）</h3>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4"
+                 hx-get="/api/trainers"
+                 hx-trigger="load"
+                 hx-indicator="#loading">
+                <div class="text-gray-500">読み込み中...</div>
+            </div>
+        </div>
+
+        <!-- プレイヤーパーティ表示 -->
+        <div class="bg-white rounded-lg shadow p-6">
+            <h3 class="font-bold text-lg mb-4">あなたのパーティ</h3>
+            <div hx-get="/api/player-party"
+                 hx-trigger="load"
+                 hx-indicator="#loading">
+                <div class="text-gray-500">読み込み中...</div>
+            </div>
+        </div>
+
+        <!-- 開始ボタン -->
+        <div class="text-center">
+            <button type="submit"
+                    class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-8 rounded-lg text-lg transition-colors shadow-lg">
+                バトル開始！
+            </button>
+        </div>
+    </form>
+</div>
+
+<script>
+function toggleCheckpointSelector() {
+    const rebelRadio = document.querySelector('input[name="ai_mode"][value="rebel"]');
+    const selector = document.getElementById('checkpoint-selector');
+    const analysisOption = document.getElementById('ai-analysis-option');
+
+    if (rebelRadio.checked) {
+        selector.classList.remove('hidden');
+        analysisOption.classList.remove('hidden');
+    } else {
+        selector.classList.add('hidden');
+        analysisOption.classList.add('hidden');
+    }
+}
+</script>
+{% endblock %}

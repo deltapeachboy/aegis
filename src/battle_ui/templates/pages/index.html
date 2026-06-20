@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}Pokemon Battle - Home{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto">
+    <div class="text-center mb-12">
+        <h2 class="text-3xl font-bold text-gray-800 mb-4">
+            ReBeL AI とポケモンバトル
+        </h2>
+        <p class="text-gray-600 mb-8">
+            不完全情報ゲーム向けの強化学習AIと対戦しよう
+        </p>
+        <a href="/setup"
+           class="inline-block bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 px-8 rounded-lg text-xl transition-colors shadow-lg hover:shadow-xl">
+            バトルを始める
+        </a>
+    </div>
+
+    <div class="grid md:grid-cols-3 gap-6 mt-12">
+        <div class="bg-white rounded-lg shadow p-6">
+            <div class="text-blue-600 text-4xl mb-4">🎮</div>
+            <h3 class="font-bold text-lg mb-2">シングルバトル</h3>
+            <p class="text-gray-600 text-sm">
+                6匹から3匹を選出して戦う、ランクマッチ形式のバトル
+            </p>
+        </div>
+
+        <div class="bg-white rounded-lg shadow p-6">
+            <div class="text-blue-600 text-4xl mb-4">🤖</div>
+            <h3 class="font-bold text-lg mb-2">ReBeL AI</h3>
+            <p class="text-gray-600 text-sm">
+                CFR + Selection BERT で最善手を探す強力なAI
+            </p>
+        </div>
+
+        <div class="bg-white rounded-lg shadow p-6">
+            <div class="text-blue-600 text-4xl mb-4">⚡</div>
+            <h3 class="font-bold text-lg mb-2">Gen9対応</h3>
+            <p class="text-gray-600 text-sm">
+                テラスタルなど最新世代の仕様に対応
+            </p>
+        </div>
+    </div>
+</div>
+{% endblock %}

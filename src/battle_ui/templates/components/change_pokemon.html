@@ -1,0 +1,38 @@
+<!-- 強制交代フェーズ -->
+<div class="fade-in">
+    <div class="max-w-2xl mx-auto">
+        <div class="bg-yellow-50 border-2 border-yellow-300 rounded-lg p-6 text-center">
+            <h2 class="text-xl font-bold text-yellow-800 mb-4">
+                次のポケモンを選んでください
+            </h2>
+            <p class="text-yellow-700 mb-6">
+                {% if state.change_reason == "faint" or not state.change_reason %}
+                ポケモンが倒れました。控えから次のポケモンを出してください。
+                {% elif state.change_reason == "ejectbutton" %}
+                だっしゅつボタンが発動しました！控えから次のポケモンを出してください。
+                {% elif state.change_reason == "ejectpack" or state.change_reason.startswith("ejectpack_") %}
+                だっしゅつパックが発動しました！控えから次のポケモンを出してください。
+                {% elif state.change_reason == "uturn" %}
+                控えから次のポケモンを出してください。
+                {% else %}
+                控えから次のポケモンを出してください。
+                {% endif %}
+            </p>
+
+            <div class="grid grid-cols-2 gap-4 max-w-md mx-auto">
+                {% for action in state.available_actions %}
+                {% if action.type == "switch" %}
+                <button hx-post="/api/battle/{{ session_id }}/action"
+                        hx-target="#battle-container"
+                        hx-indicator="#loading"
+                        hx-vals='{"action_type": "switch", "action_index": {{ action.index }}}'
+                        class="action-btn bg-yellow-500 hover:bg-yellow-600 text-white py-4 px-6 rounded-lg font-bold transition-colors">
+                    <div class="text-lg">{{ action.name }}</div>
+                    <div class="text-sm opacity-80">HP: {{ (action.hp_ratio * 100)|int }}%</div>
+                </button>
+                {% endif %}
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>

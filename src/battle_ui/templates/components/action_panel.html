@@ -1,0 +1,58 @@
+<!-- アクションパネル -->
+<div class="bg-white rounded-lg shadow p-4">
+    <h3 class="text-sm text-gray-500 mb-3">行動を選択</h3>
+
+    <!-- 技選択 -->
+    <div class="mb-4">
+        <h4 class="text-xs font-bold text-gray-600 mb-2">技</h4>
+        <div class="grid grid-cols-2 gap-2">
+            {% for action in state.available_actions %}
+            {% if action.type == "move" %}
+            <div class="space-y-1">
+                <button hx-post="/api/battle/{{ session_id }}/action"
+                        hx-target="#battle-container"
+                        hx-indicator="#loading"
+                        hx-vals='{"action_type": "move", "action_index": {{ action.index }}, "with_tera": false}'
+                        {% if action.disabled %}disabled{% endif %}
+                        class="w-full action-btn bg-blue-500 hover:bg-blue-600 disabled:bg-gray-300
+                               text-white py-2 px-3 rounded-lg text-sm font-medium transition-colors">
+                    {{ action.name }}
+                </button>
+
+                {% if action.can_tera and state.player_active and not state.player_active.is_terastallized %}
+                <button hx-post="/api/battle/{{ session_id }}/action"
+                        hx-target="#battle-container"
+                        hx-indicator="#loading"
+                        hx-vals='{"action_type": "move", "action_index": {{ action.index }}, "with_tera": true}'
+                        class="w-full action-btn bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600
+                               text-white py-1.5 px-3 rounded-lg text-xs font-medium transition-colors">
+                    ✦ テラス + {{ action.name }}
+                </button>
+                {% endif %}
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- 交代 -->
+    <div>
+        <h4 class="text-xs font-bold text-gray-600 mb-2">交代</h4>
+        <div class="grid grid-cols-2 gap-2">
+            {% for action in state.available_actions %}
+            {% if action.type == "switch" %}
+            <button hx-post="/api/battle/{{ session_id }}/action"
+                    hx-target="#battle-container"
+                    hx-indicator="#loading"
+                    hx-vals='{"action_type": "switch", "action_index": {{ action.index }}}'
+                    {% if action.disabled %}disabled{% endif %}
+                    class="action-btn bg-green-500 hover:bg-green-600 disabled:bg-gray-300
+                           text-white py-2 px-3 rounded-lg text-sm font-medium transition-colors">
+                <div>{{ action.name }}</div>
+                <div class="text-xs opacity-80">HP: {{ (action.hp_ratio * 100)|int }}%</div>
+            </button>
+            {% endif %}
+            {% endfor %}
+        </div>
+    </div>
+</div>

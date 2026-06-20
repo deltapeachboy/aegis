@@ -1,0 +1,163 @@
+<!-- 選出フェーズ -->
+<div class="max-w-6xl mx-auto fade-in">
+    <h2 class="text-2xl font-bold text-gray-800 mb-6 text-center">
+        ポケモンを3匹選出してください
+    </h2>
+
+    <div class="grid lg:grid-cols-2 gap-8">
+        <!-- 自分のチーム -->
+        <div class="bg-white rounded-lg shadow p-6">
+            <h3 class="font-bold text-lg mb-4 text-blue-600">あなたのチーム</h3>
+            <form hx-post="/api/battle/{{ session_id }}/select"
+                  hx-target="#battle-container"
+                  hx-swap="innerHTML"
+                  hx-indicator="#loading"
+                  id="selection-form">
+                <input type="hidden" name="pokemon_indices" id="pokemon-indices" value="[]">
+
+                <div class="grid grid-cols-2 gap-3 mb-4" id="pokemon-selection">
+                    {% for pokemon in state.player_team %}
+                    <label class="block cursor-pointer">
+                        <input type="checkbox"
+                               value="{{ pokemon.index }}"
+                               class="pokemon-checkbox peer hidden"
+                               onchange="updateSelection()">
+                        <div class="border-2 border-gray-200 rounded-lg p-3 transition-all
+                                    peer-checked:border-blue-500 peer-checked:bg-blue-50
+                                    hover:border-gray-300 pokemon-card">
+                            <div class="font-bold text-gray-800 mb-1">{{ pokemon.name }}</div>
+                            <div class="text-xs text-gray-500">
+                                <div>{{ pokemon.ability }}</div>
+                                <div>{{ pokemon.item }}</div>
+                                <div class="flex items-center gap-1 mt-1 flex-wrap">
+                                    {% if pokemon.arceus_type %}
+                                    <span class="type-badge type-{{ pokemon.arceus_type }}">
+                                        タイプ: {{ pokemon.arceus_type }}
+                                    </span>
+                                    {% endif %}
+                                    <span class="type-badge type-{{ pokemon.tera_type }}">
+                                        テラス: {{ pokemon.tera_type }}
+                                    </span>
+                                </div>
+                            </div>
+                            <div class="mt-2 flex flex-wrap gap-1">
+                                {% for move in pokemon.moves %}
+                                <span class="text-xs bg-white text-gray-600 px-1 py-0.5 rounded border">
+                                    {{ move }}
+                                </span>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </label>
+                    {% endfor %}
+                </div>
+
+                <div class="text-center">
+                    <p id="selection-count" class="text-gray-600 mb-3">
+                        選出: 0 / 3
+                    </p>
+                    <button type="submit"
+                            id="confirm-selection"
+                            disabled
+                            class="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed
+                                   text-white font-bold py-2 px-6 rounded-lg transition-colors">
+                        選出を確定
+                    </button>
+                </div>
+            </form>
+        </div>
+
+        <!-- 相手のチーム（プレビュー） -->
+        <div class="bg-white rounded-lg shadow p-6">
+            <h3 class="font-bold text-lg mb-4 text-red-600">相手のチーム</h3>
+            <div class="grid grid-cols-2 gap-3">
+                {% for pokemon in state.opponent_preview %}
+                <div class="bg-gray-50 rounded-lg p-3 pokemon-card">
+                    <div class="font-bold text-gray-800">{{ pokemon.name }}</div>
+                    {% if pokemon.arceus_type %}
+                    <div class="text-xs mt-1">
+                        <span class="type-badge type-{{ pokemon.arceus_type }}">
+                            タイプ: {{ pokemon.arceus_type }}
+                        </span>
+                    </div>
+                    {% else %}
+                    <div class="text-xs text-gray-400 mt-1">
+                        （詳細は不明）
+                    </div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// 選択順序を保持する配列
+let selectionOrder = [];
+
+function updateSelection() {
+    const checkboxes = document.querySelectorAll('.pokemon-checkbox');
+
+    // 現在チェックされているポケモンのインデックスを取得
+    const currentlyChecked = new Set();
+    checkboxes.forEach(cb => {
+        if (cb.checked) {
+            currentlyChecked.add(parseInt(cb.value));
+        }
+    });
+
+    // 選択解除されたポケモンを配列から削除
+    selectionOrder = selectionOrder.filter(idx => currentlyChecked.has(idx));
+
+    // 新しく選択されたポケモンを配列に追加
+    currentlyChecked.forEach(idx => {
+        if (!selectionOrder.includes(idx)) {
+            selectionOrder.push(idx);
+        }
+    });
+
+    const count = selectionOrder.length;
+
+    // 3匹選んだら残りを無効化
+    checkboxes.forEach(cb => {
+        if (count >= 3 && !cb.checked) {
+            cb.disabled = true;
+            cb.parentElement.classList.add('opacity-50');
+        } else {
+            cb.disabled = false;
+            cb.parentElement.classList.remove('opacity-50');
+        }
+    });
+
+    // 選択順序を表示に反映
+    checkboxes.forEach(cb => {
+        const idx = parseInt(cb.value);
+        const card = cb.parentElement.querySelector('.pokemon-card');
+        const orderBadge = card.querySelector('.order-badge');
+
+        if (selectionOrder.includes(idx)) {
+            const order = selectionOrder.indexOf(idx) + 1;
+            if (orderBadge) {
+                orderBadge.textContent = order;
+            } else {
+                const badge = document.createElement('span');
+                badge.className = 'order-badge absolute -top-2 -right-2 bg-blue-600 text-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center';
+                badge.textContent = order;
+                card.classList.add('relative');
+                card.appendChild(badge);
+            }
+        } else {
+            if (orderBadge) {
+                orderBadge.remove();
+            }
+        }
+    });
+
+    document.getElementById('pokemon-indices').value = JSON.stringify(selectionOrder);
+    document.getElementById('selection-count').textContent = `選出: ${count} / 3`;
+
+    const btn = document.getElementById('confirm-selection');
+    btn.disabled = count !== 3;
+}
+</script>

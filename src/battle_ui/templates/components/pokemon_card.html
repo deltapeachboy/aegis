@@ -1,0 +1,102 @@
+<!-- ポケモンカード -->
+<div class="rounded-lg p-3 pokemon-card
+            {% if is_active %}bg-gradient-to-br from-blue-50 to-blue-100 border-2 border-blue-300 active-pokemon
+            {% else %}bg-gray-50{% endif %}
+            {% if pokemon.is_terastallized %}terastallized{% endif %}">
+
+    <!-- 名前 & タイプ -->
+    <div class="flex items-center justify-between mb-2">
+        <span class="font-bold text-gray-800 {% if is_active %}text-lg{% endif %}">
+            {{ pokemon.name }}
+        </span>
+        <div class="flex gap-1">
+            {% if pokemon.is_terastallized %}
+            <span class="type-badge type-{{ pokemon.tera_type }}">{{ pokemon.tera_type }}</span>
+            {% else %}
+            {% for ptype in pokemon.types %}
+            <span class="type-badge type-{{ ptype }}">{{ ptype }}</span>
+            {% endfor %}
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- HPバー -->
+    <div class="mb-2">
+        <div class="flex justify-between text-xs text-gray-600 mb-1">
+            <span>HP</span>
+            <span>{{ pokemon.hp_percent }}%</span>
+        </div>
+        <div class="hp-bar">
+            <div class="hp-bar-fill
+                        {% if pokemon.hp_ratio > 0.5 %}hp-high
+                        {% elif pokemon.hp_ratio > 0.2 %}hp-medium
+                        {% else %}hp-low{% endif %}"
+                 style="width: {{ pokemon.hp_percent }}%">
+            </div>
+        </div>
+        {% if is_player and is_active %}
+        <div class="text-xs text-gray-500 mt-1">
+            {{ pokemon.current_hp }} / {{ pokemon.max_hp }}
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- 状態異常 -->
+    {% if pokemon.status %}
+    <div class="mb-2">
+        <span class="status-badge status-{{ pokemon.status }}">
+            {{ pokemon.status }}
+        </span>
+    </div>
+    {% endif %}
+
+    <!-- プレイヤーの詳細情報 -->
+    {% if is_player %}
+    <div class="text-xs text-gray-500 space-y-1">
+        {% if pokemon.item %}
+        <div>持: {{ pokemon.item }}</div>
+        {% endif %}
+        {% if pokemon.ability %}
+        <div>特: {{ pokemon.ability }}</div>
+        {% endif %}
+    </div>
+
+    <!-- 能力変化 -->
+    {% if is_active and pokemon.stat_changes %}
+    <div class="flex flex-wrap gap-1 mt-2">
+        {% if pokemon.stat_changes.attack != 0 %}
+        <span class="text-xs {% if pokemon.stat_changes.attack > 0 %}stat-up{% else %}stat-down{% endif %}">
+            攻{% if pokemon.stat_changes.attack > 0 %}+{% endif %}{{ pokemon.stat_changes.attack }}
+        </span>
+        {% endif %}
+        {% if pokemon.stat_changes.defense != 0 %}
+        <span class="text-xs {% if pokemon.stat_changes.defense > 0 %}stat-up{% else %}stat-down{% endif %}">
+            防{% if pokemon.stat_changes.defense > 0 %}+{% endif %}{{ pokemon.stat_changes.defense }}
+        </span>
+        {% endif %}
+        {% if pokemon.stat_changes.sp_attack != 0 %}
+        <span class="text-xs {% if pokemon.stat_changes.sp_attack > 0 %}stat-up{% else %}stat-down{% endif %}">
+            特攻{% if pokemon.stat_changes.sp_attack > 0 %}+{% endif %}{{ pokemon.stat_changes.sp_attack }}
+        </span>
+        {% endif %}
+        {% if pokemon.stat_changes.sp_defense != 0 %}
+        <span class="text-xs {% if pokemon.stat_changes.sp_defense > 0 %}stat-up{% else %}stat-down{% endif %}">
+            特防{% if pokemon.stat_changes.sp_defense > 0 %}+{% endif %}{{ pokemon.stat_changes.sp_defense }}
+        </span>
+        {% endif %}
+        {% if pokemon.stat_changes.speed != 0 %}
+        <span class="text-xs {% if pokemon.stat_changes.speed > 0 %}stat-up{% else %}stat-down{% endif %}">
+            速{% if pokemon.stat_changes.speed > 0 %}+{% endif %}{{ pokemon.stat_changes.speed }}
+        </span>
+        {% endif %}
+    </div>
+    {% endif %}
+    {% endif %}
+
+    <!-- テラスタル表示 -->
+    {% if pokemon.is_terastallized %}
+    <div class="mt-2 text-xs text-purple-600 font-bold">
+        ✦ テラスタル中
+    </div>
+    {% endif %}
+</div>

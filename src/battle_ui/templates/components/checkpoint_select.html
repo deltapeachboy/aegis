@@ -1,0 +1,24 @@
+<!-- チェックポイント選択 -->
+{% if checkpoints %}
+<select name="checkpoint_path"
+        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+    {% for checkpoint in checkpoints %}
+    <option value="{{ checkpoint.path }}"
+            {% if loop.last %}selected{% endif %}>
+        {{ checkpoint.name }}
+        {% if checkpoint.win_rate is not none %}
+        (勝率: {{ "%.1f"|format(checkpoint.win_rate * 100) }}%)
+        {% endif %}
+    </option>
+    {% endfor %}
+</select>
+<p class="text-xs text-gray-500 mt-1">
+    {{ checkpoints | length }}個のチェックポイントが利用可能です
+</p>
+{% else %}
+<div class="text-gray-500 italic">
+    チェックポイントが見つかりません。
+    <br>
+    <span class="text-xs">REBEL_CHECKPOINT_DIR 環境変数を確認してください。</span>
+</div>
+{% endif %}

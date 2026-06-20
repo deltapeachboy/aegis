@@ -1,0 +1,27 @@
+<!-- トレーナー選択リスト -->
+{% for trainer in trainers %}
+<label class="block cursor-pointer">
+    <input type="radio"
+           name="trainer_index"
+           value="{{ trainer.index }}"
+           class="peer hidden"
+           {% if loop.first %}checked{% endif %}>
+    <div class="border-2 border-gray-200 rounded-lg p-4 transition-all
+                peer-checked:border-blue-500 peer-checked:bg-blue-50
+                hover:border-gray-300">
+        <div class="flex items-center justify-between mb-2">
+            <span class="font-bold text-gray-800">{{ trainer.name }}</span>
+            <span class="text-sm text-gray-500">
+                Rank #{{ trainer.rank }} ({{ trainer.rating }})
+            </span>
+        </div>
+        <div class="flex flex-wrap gap-1">
+            {% for pokemon_name in trainer.pokemon_names %}
+            <span class="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded">
+                {{ pokemon_name }}
+            </span>
+            {% endfor %}
+        </div>
+    </div>
+</label>
+{% endfor %}
