@@ -83,6 +83,7 @@ except ImportError:
     try:
         from src.hypothesis.item_belief_state import Observation, ObservationType
     except ImportError:
+        # クラスが定義されていない場合のフォールバック定義
         class ObservationType:
             MOVE_USED = "move_used"
             ITEM_REVEALED = "item_revealed"
@@ -291,21 +292,11 @@ if __name__ == "__main__":
     Pokemon.init(season=22)
 
     # =========================================================================
-    # 【Aegisの根幹：キングシールド表記揺れ自動同期パッチ】
-    # データベース内の本物の 'キングズシールド' データを 'キングシールド' として再マッピングする
-    # =========================================================================
-    for target_alias in ['キングズシールド', 'キング・シールド']:
-        if target_alias in Pokemon.all_moves:
-            Pokemon.all_moves['キングシールド'] = Pokemon.all_moves[target_alias]
-            print(
-                f"ℹ️ [Aegis Patch] 表記揺れ '{target_alias}' を本物の 'キングシールド' データとしてエイリアスマッピングしました。")
-            break
-
-    # =========================================================================
     # 【図鑑補正パッチ】Pokemon.zukan における 'ギルガルド' のキー欠損補正
     # =========================================================================
     if hasattr(Pokemon, 'zukan'):
         if 'ギルガルド' not in Pokemon.zukan:
+            # ギルガルド(シールド) または ギルガルド（シールド）（全角半角の表記揺れ対応）を探す
             for target_key in ['ギルガルド(シールド)', 'ギルガルド（シールド）']:
                 if target_key in Pokemon.zukan:
                     # データをディープコピーして 'ギルガルド' キーを生成
@@ -355,7 +346,7 @@ if __name__ == "__main__":
             print(f"\n--- ［試合 {match_idx}/{num_matches}］をシミュレート中 ---")
 
             try:
-                # 自己対戦を実行
+                # 自己対戦を実行 (analyzer インスタンスを引数に追加)
                 match_data = run_single_selfplay_match(
                     match_id=match_idx,
                     builder=builder,

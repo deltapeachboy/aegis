@@ -272,7 +272,7 @@ class Battle:
         else:
             return (
                 "ひこう" in p.types
-                or p.ability == "ふゆう"
+                or p.ability in ["ふゆう", "うなぎのぼり"]  # ➔ 「うなぎのぼり」を追加
                 or p.item == "ふうせん"
                 or p.condition["magnetrise"]
             )
@@ -311,6 +311,9 @@ class Battle:
             case "フェアリースキン":
                 if move_type == "ノーマル":
                     return "フェアリー"
+            case "ドラゴンスキン":
+                if move_type == "ノーマル":
+                    return "ドラゴン"
             case "フリーズスキン":
                 if move_type == "ノーマル":
                     return "こおり"
@@ -337,8 +340,13 @@ class Battle:
 
     def weather(self, player: int = None) -> str:
         """現在の天候を返す。{player}を指定すると、ばんのうがさを考慮する"""
+        # ➔ ここにメガソーラーの天候偽装を追加（ノーてんきを無視して貫通）
+        if player in range(2) and self.pokemon[player] is not None:
+            if self.pokemon[player].ability == "メガソーラー":
+                return "sunny"
+
         if any(
-            s in [p.ability for p in self.pokemon] for s in ["エアロック", "ノーてんき"]
+            s in [p.ability for p in self.pokemon if p is not None] for s in ["エアロック", "ノーてんき"]
         ):
             return ""
         for s in Pokemon.weathers:
@@ -649,6 +657,9 @@ class Battle:
             case "スカイスキン":
                 if Pokemon.all_moves[move]["type"] == "ノーマル":
                     r = round_half_up(r * 4915 / 4096)
+            case "ドラゴンスキン":
+                if Pokemon.all_moves[move]["type"] == "ノーマル":
+                    r = round_half_up(r * 4915 / 4096)
             case "すてみ":
                 if (
                     move in Pokemon.move_value["rebound"]
@@ -815,6 +826,9 @@ class Battle:
         match p1.ability:
             case "いわはこび":
                 if move_type == "いわ":
+                    r = round_half_up(r * 1.5)
+            case "ほのおのたてがみ":
+                if move_type == "ほのお":
                     r = round_half_up(r * 1.5)
             case "げきりゅう":
                 if move_type == "みず" and p1.hp / p1.status[0] <= 1 / 3:
@@ -3706,6 +3720,14 @@ class Battle:
             move = self.move[player]
             move_class = Pokemon.all_moves[move]["class"] if move else None
 
+            # ➔ ここにギルガルドのバトルスイッチによるチェンジを挿入
+            if move and self.pokemon[player] is not None:
+                if self.pokemon[player].ability == "バトルスイッチ":
+                    if move_class in ["phy", "spe"]:
+                        self.pokemon[player].change_form("ギルガルド(ブレード)")
+                    elif move == "キングシールド":
+                        self.pokemon[player].change_form("ギルガルド(シールド)")
+
             if not any(self.breakpoint):
                 self.standby[player] = False
 
@@ -4074,9 +4096,11 @@ class Battle:
                         self.protect
                         and move not in Pokemon.move_category["unprotect"]
                 ):
-                    if self.pokemon[player].ability == "ふかしのこぶし" and self.pokemon[player].contacts(move):
+                    # ➔ かんつうドリルを追加
+                    if (self.pokemon[player].ability in ["ふかしのこぶし", "かんつうドリル"]) and self.pokemon[
+                        player].contacts(move):
                         is_penetrated_by_fufuki = True
-                        self.log[player].append("ふかしのこぶし（守る貫通・ダメージ25%）")
+                        self.log[player].append(f"{self.pokemon[player].ability}（守る貫通・ダメージ25%）")
 
                     # 貫通の有無にかかわらず、守る側の防御成功可否および接触効果を計算する
                     self.was_valid[player2] = move_class in ["phy", "spe"]
@@ -4652,6 +4676,12 @@ class Battle:
                                 observed = False
 
                                 match self.pokemon[player2].ability:
+                                    case "とびだすハバネロ":
+                                        if not self.pokemon[player].is_fainted() and "ほのお" not in self.pokemon[
+                                            player].types:
+                                            if self.set_ailment(player, "BRN"):
+                                                self.log[player2].append(self.pokemon[player2].ability)
+                                                observed = True
                                     case "いかりのつぼ":
                                         if critical and self.add_rank(player2, 1, +12):
                                             self.log[player2].insert(
@@ -5818,10 +5848,21 @@ class Battle:
                                                 f"-> {self.pokemon[pl].item}"
                                             )
                                 case "せいちょう":
-                                    v = 2 if self.weather(pl1) == "sunny" else 1
-                                    self.was_valid[player] = bool(
-                                        self.add_rank(pl1, 0, 0, [0, 0, 0, v, v])
-                                    )
+                                    # ➔ メガソーラー所持時の処理を分岐
+                                    if self.pokemon[pl1].ability == "メガソーラー":
+                                        if self.weather(pl1) == "sunny":
+                                            self.was_valid[player] = bool(
+                                                self.add_rank(pl1, 0, 0, [0, 0, 0, 2, 2])
+                                            )
+                                        else:
+                                            # 晴れでないなら：上昇0、不発メッセージなし、失敗フラグのみON
+                                            self.was_valid[player] = False
+                                            self.pokemon[pl1].last_move_failed = True
+                                    else:
+                                        v = 2 if self.weather(pl1) == "sunny" else 1
+                                        self.was_valid[player] = bool(
+                                            self.add_rank(pl1, 0, 0, [0, 0, 0, v, v])
+                                        )
                                 case "ステルスロック":
                                     pre = self.condition["stealthrock"][player2]
                                     self.condition["stealthrock"][pl2] = 1
@@ -6362,6 +6403,16 @@ class Battle:
                     observed = False
 
                     match self.pokemon[player].ability:
+                        case "うなぎのぼり":
+                            if not self.pokemon[player2].hp:
+                                p1 = self.pokemon[player]
+                                stats = [p1.attack, p1.defense, p1.sp_attack, p1.sp_defense, p1.speed]
+                                stat_labels = ["attack", "defense", "sp_attack", "sp_defense", "speed"]
+                                max_stat_name = stat_labels[stats.index(max(stats))]
+                                stat_idx = stat_labels.index(max_stat_name) + 1  # (A=1, B=2, C=3, D=4, S=5)
+                                if self.add_rank(player, stat_idx, +1):
+                                    self.log[player].insert(-1, p1.ability)
+                                    observed = True
                         case "じしんかじょう" | "しろのいななき":
                             if not self.pokemon[player2].hp and self.add_rank(
                                 player, 1, +1
