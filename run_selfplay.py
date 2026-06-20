@@ -1,22 +1,41 @@
 import sys
 import types
-import builtins  # 追加
-import os        # 追加
+import builtins
+import os
+import json
+import io
 
 # =========================================================================
-# 0. 【File Path Redirect Patch】
-# シミュレータが 'learnset.json' を探した際、'battle_data/mb_learnset.json' へ自動リダイレクトする
+# 0. 【File Path Redirect & Aegislash Data Patch】
+# シミュレータの技リストロード時に、自動で mb_learnset.json を参照し、
+# かつギルガルド各フォルムに技データを動的同期（注入）するパッチ
 # =========================================================================
 _original_open = builtins.open
 
+
 def patched_open(file, *args, **kwargs):
+    # 'learnset.json' を含むファイルアクセスを検知
     if isinstance(file, str) and "learnset.json" in file:
         custom_path = os.path.join("battle_data", "mb_learnset.json")
         if os.path.exists(custom_path):
-            # ログ出力（動作確認用）
-            print(f"ℹ️ [Redirect] '{file}' へのアクセスを '{custom_path}' へリダイレクトしました。")
-            file = custom_path
+            print(f"ℹ️ [Redirect & Patch] '{file}' へのアクセスを検知。ギルガルドの技データを補正してロードします。")
+
+            # 1. 実際に mb_learnset.json をロード
+            with _original_open(custom_path, "r", encoding="utf-8") as f:
+                learnset = json.load(f)
+
+            # 2. ギルガルド(ブレード/シールド)に技データを同期（エイリアス作成）
+            base_key = "ギルガルド" if "ギルガルド" in learnset else "ギルガルド(シールド)"
+            if base_key in learnset:
+                learnset["ギルガルド(ブレード)"] = learnset[base_key]
+                learnset["ギルガルド(シールド)"] = learnset[base_key]
+
+            # 3. メモリ上でJSON文字列に戻し、ストリームオブジェクトとしてシミュレータに引き渡す
+            patched_json_str = json.dumps(learnset, ensure_ascii=False)
+            return io.StringIO(patched_json_str)
+
     return _original_open(file, *args, **kwargs)
+
 
 builtins.open = patched_open
 
@@ -44,8 +63,6 @@ sys.modules['src.pokemon_battle_sim.damage'].__dict__.update(pokemon_module.__di
 # =========================================================================
 # 2. 標準ライブラリ・統合AIモジュールのロード
 # =========================================================================
-import os
-import json
 import time
 import random
 from copy import deepcopy
@@ -64,10 +81,12 @@ except ImportError:
     try:
         from src.hypothesis.item_belief_state import Observation, ObservationType
     except ImportError:
-        # クラスが定義されていない場合のフォールバック（簡易版の定義）
+        # クラスが定義されていない場合のフォールバック定義
         class ObservationType:
             MOVE_USED = "move_used"
             ITEM_REVEALED = "item_revealed"
+
+
         class Observation:
             def __init__(self, type, pokemon_name, details):
                 self.type = type
@@ -244,16 +263,31 @@ if __name__ == "__main__":
     # 1. シミュレータの初期化
     Pokemon.init(season=22)
 
+    # =========================================================================
+    # 【図鑑補正パッチ】Pokemon.zukan における 'ギルガルド' のキー欠損補正
+    # =========================================================================
+    if hasattr(Pokemon, 'zukan'):
+        if 'ギルガルド' not in Pokemon.zukan:
+            # ギルガルド(シールド) または ギルガルド（シールド）（全角半角の表記揺れ対応）を探す
+            for target_key in ['ギルガルド(シールド)', 'ギルガルド（シールド）']:
+                if target_key in Pokemon.zukan:
+                    # データをディープコピーして 'ギルガルド' キーを生成
+                    Pokemon.zukan['ギルガルド'] = deepcopy(Pokemon.zukan[target_key])
+                    Pokemon.zukan['ギルガルド']['display_name'] = 'ギルガルド'
+                    print(f"ℹ️ [Patch] Pokemon.zukan に '{target_key}' から 'ギルガルド' のエイリアスを生成しました。")
+                    break
+
     # アナライザーから共通設定をインポート
     print("Aegis環境データを統合中...")
     analyzer = AegisAnalyzer()
 
     # =========================================================================
-    # 【動的パッチ】analyzer.belief_state が None の場合の初期化補正
+    # 【動的補正】analyzer.belief_state が None の場合の初期化補正
     # =========================================================================
     if getattr(analyzer, 'belief_state', None) is None:
         print("ℹ️ analyzer.belief_state が None のため、動的に代替インスタンスを割り当てます。")
         from src.rebel.belief_state import PokemonBeliefState
+
         try:
             # 引数なしでの初期化を試行
             analyzer.belief_state = PokemonBeliefState()
