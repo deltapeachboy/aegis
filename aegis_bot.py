@@ -827,9 +827,13 @@ class AegisAnalyzer(Pokebot):
         os.makedirs("log", exist_ok=True)
         path = "log/party.log"
         if not os.path.exists(path):
-            print("⚠️ log/party.log が見つかりません。Aegis TeamBuilder で自動構築します。")
-            self.team_builder.build_team("ガブリアス")
-            print("✅ チームビルダーによる最強構築(1世代目)の自動生成が完了しました。")
+            print("⚠️ log/party.log が見つかりません。Aegis TeamBuilder で自動構築して保存します。")
+            # 構築を生成
+            default_party = self.team_builder.build_team("ガブリアス")
+            # 🌟 ちゃんとファイルに書き出して保存する
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(default_party, f, ensure_ascii=False, indent=2)
+            print("✅ チームビルダーによる最強構築(1世代目)のファイル保存が完了しました。")
 
     def _load_mb_rules(self) -> None:
         try:
