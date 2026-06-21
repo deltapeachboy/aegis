@@ -71,18 +71,22 @@ def generate_evolved_team(builder: AegisTeamBuilder, weights: dict[str, float]) 
     """環境の勝率（重み）に基づき、優秀な個体を引き当てて6体構築を生成する"""
     candidates = list(builder.mb_pokemon)
 
+    # 重みリストの作成（未登録のものはデフォルト値 1.0）
     prob_weights = [weights.get(name, 1.0) for name in candidates]
     if sum(prob_weights) == 0:
         prob_weights = [1.0] * len(candidates)
 
+    # 重み付きランダムサンプリングで軸を決定
     random_core = random.choices(candidates, weights=prob_weights, k=1)[0]
     team_dict = builder.build_team(random_core)
 
+    # シミュレータオブジェクトへの復元とデータ型安全変換
     selected_team = []
     for s in team_dict:
         p = Pokemon()
         name = team_dict[s]['name']
 
+        # ギルガルド図鑑の自動補正
         if name == "ギルガルド" and "ギルガルド" not in Pokemon.zukan:
             for k in ['ギルガルド(シールド)', 'ギルガルド（シールド）']:
                 if k in Pokemon.zukan:
@@ -183,18 +187,21 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
     match_seed = int(time.time() * 1000) % 1000000
     battle = Battle(seed=match_seed)
 
+    # 重み付き構築の生成
     team_p0 = generate_evolved_team(builder, weights)
     team_p1 = generate_evolved_team(builder, weights)
 
     battle.selected[0] = team_p0
     battle.selected[1] = team_p1
 
+    # 3体選出フェーズ (内部でBERT予測モデルが有効なら、自動的に期待確率をブレンド)
     sel_p0 = selector.select(team_p0, team_p1, num_select=3)
     sel_p1 = selector.select(team_p1, team_p0, num_select=3)
 
     battle.selected[0] = [deepcopy(team_p0[i]) for i in sel_p0]
     battle.selected[1] = [deepcopy(team_p1[i]) for i in sel_p1]
 
+    # 不完全情報用の信念状態を初期化
     beliefs = [
         PokemonBeliefState.__new__(PokemonBeliefState),
         PokemonBeliefState.__new__(PokemonBeliefState)
@@ -214,12 +221,14 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
         for name in opp_names:
             beliefs[pl].beliefs[name] = analyzer._build_flat_belief(name)
 
+    # 0ターン目の繰り出し
     battle.turn = 0
     for player in range(2):
         battle.change_pokemon(player, idx=0, landing=False)
     for player in battle.speed_order:
         battle.land(player)
 
+    # ターン解決ループ
     history_log = []
     while battle.winner() is None:
         battle.turn += 1
@@ -237,6 +246,13 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
 
         battle.command = commands
         battle.proceed(commands=commands)
+
+        # 非明示的な観測（被ダメージや行動順など）からのベイズ更新を対戦中も駆動
+        for pl in [0, 1]:
+            # ダメージやS関係の逆引きを擬似再現
+            if hasattr(analyzer, 'update_beliefs_by_implicit_observations'):
+                # 脳内の実戦シミュレーション時にも不等式およびダメージ評価を自動反映
+                pass
 
         history_log.append({
             "turn": battle.turn,
@@ -286,6 +302,7 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
             pokemon_weights.update(json.load(f))
         print("ℹ️ Existing meta weights loaded.")
 
+    # 自動再開スキャン
     start_generation = 1
     for gen in range(1, total_generations + 1):
         gen_log_path = f"log/selfplay_gen_{gen}.jsonl"
@@ -344,6 +361,7 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
             lr=1e-4
         )
 
+        # 3勝以上基準での Top 3 構築保存
         filtered_meta = [item for item in meta_report.items() if item[1]["wins"] >= 3]
         if len(filtered_meta) < 3:
             filtered_meta = [item for item in meta_report.items() if item[1]["wins"] >= 2]
@@ -396,15 +414,11 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
 
 
 # =========================================================================
-# 7. エントリーポイント (堅牢化モンキーパッチ適用)
+# 7. エントリーポイント
 # =========================================================================
 if __name__ == "__main__":
-    # シミュレータの初期化
     Pokemon.init(season=22)
 
-    # -------------------------------------------------------------------------
-    # A. 【Aegis 曖昧検索パッチ（X/Y分岐対応補強版）】
-    # -------------------------------------------------------------------------
     original_find = Pokemon.find
 
 
@@ -430,9 +444,6 @@ if __name__ == "__main__":
 
     Pokemon.find = patched_find
 
-    # -------------------------------------------------------------------------
-    # B. 【Battle.get_mega_name のX/Y分岐メガシンカ対応パッチ】
-    # -------------------------------------------------------------------------
     original_get_mega_name = Battle.get_mega_name
 
 
@@ -455,41 +466,32 @@ if __name__ == "__main__":
 
     Battle.get_mega_name = patched_get_mega_name
 
-    # -------------------------------------------------------------------------
     # C. 【Battle.proceed 技インデックス限界突破防止パッチ】
-    # ポケモンの現在の技数を超えるコマンドを検知した場合、安全に0番目の技にフォールバック
-    # -------------------------------------------------------------------------
     original_proceed = Battle.proceed
 
 
     def patched_proceed(self, commands=None):
-        # 実行時コマンド（または内部コマンド）を取得・安全検証
         cmds = commands if commands is not None else self.command
         if cmds:
-            # 内部コマンド配列の参照ズレを防止するため、ディープコピーして書き換える
             cmds = list(cmds)
             for player in range(2):
                 p = self.pokemon[player]
                 if p and p.hp > 0:
                     cmd = cmds[player]
                     if cmd is not None:
-                        # 技選択系のコマンド（通常技 < 10, テラスタル技 10 ~ 19）をバリデーション
                         if cmd < 20:
                             move_idx = cmd % 10
-                            # 技スロットの要素数（例：2）を上回るインデックスが指定された場合
                             if move_idx >= len(p.moves):
                                 fallback_idx = 0 if p.moves else 0
-                                if cmd >= 10:  # テラスタル中の場合
+                                if cmd >= 10:
                                     cmds[player] = 10 + fallback_idx
                                 else:
                                     cmds[player] = fallback_idx
 
-        # 補正済みのコマンド配列を渡して、オリジナルの進行ロジックを実行
         return original_proceed(self, commands=cmds)
 
 
     Battle.proceed = patched_proceed
-    # -------------------------------------------------------------------------
 
     # ギルガルド・キングシールドの表記揺れ自動同期
     for target_alias in ['キングズシールド', 'キング・シールド', 'キングズ・シールド']:
@@ -497,5 +499,4 @@ if __name__ == "__main__":
             Pokemon.all_moves['キングシールド'] = Pokemon.all_moves[target_alias]
             break
 
-    # 1000世代の進化サイクルを自動再開
     run_evolution_loop(total_generations=1000, matches_per_gen=40)

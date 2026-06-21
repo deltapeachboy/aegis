@@ -7,11 +7,44 @@ import random
 import os
 import json
 import io
+import time
+import warnings
+import numpy as np
+import cv2
+import mss  # 高速画面キャプチャライブラリ
+import urllib.request  # SDK不要でGemini APIと直接通信
+import gensim
 
 # =========================================================================
-# 0. 【File Path Redirect & Aegislash Data Patch (絶対位置対応版)】
-# どこから実行されても、自身の物理位置から 'battle_data/mb_learnset.json' を
-# 逆算し、強制リダイレクトとギルガルドの技同期を行う頑健なパッチ
+# 0. 外部高度推論ライブラリの安全ロード（Safe Fallback）
+# =========================================================================
+# A. PyTorch (BERT選出予測用)
+try:
+    import torch
+    import torch.nn as nn
+except ImportError:
+    torch = None
+    nn = None
+
+# B. gensim (Word2Vec構築補完用)
+try:
+    from gensim.models import Word2Vec
+except ImportError:
+    from gensim import models
+
+    # `from gensim.models import Word2Vec` がインポートできない場合はNoneフォールバック
+    Word2Vec = None
+except Exception:
+    Word2Vec = None
+
+# C. ダメージ計算API
+try:
+    from src.damage_calculator_api.calculators.damage_calculator import calculate_damage
+except ImportError:
+    calculate_damage = None
+
+# =========================================================================
+# 1. 【File Path Redirect & Aegislash Data Patch】
 # =========================================================================
 _original_open = builtins.open
 
@@ -22,19 +55,14 @@ def patched_open(file, *args, **kwargs):
         custom_path = os.path.join(base_dir, "battle_data", "mb_learnset.json")
 
         if os.path.exists(custom_path):
-            print(f"ℹ️ [Redirect & Patch] '{file}' ➔ '{custom_path}' へ強制リダイレクトロードします。")
-
-            # 1. 実際に mb_learnset.json をロード
             with _original_open(custom_path, "r", encoding="utf-8") as f:
                 learnset = json.load(f)
 
-            # 2. ギルガルド(ブレード/シールド)に技データを同期
             base_key = "ギルガルド" if "ギルガルド" in learnset else "ギルガルド(シールド)"
             if base_key in learnset:
                 learnset["ギルガルド(ブレード)"] = learnset[base_key]
                 learnset["ギルガルド(シールド)"] = learnset[base_key]
 
-            # 3. メモリ上でJSON文字列に戻し、ストリームオブジェクトとしてシミュレータに引き渡す
             patched_json_str = json.dumps(learnset, ensure_ascii=False)
             return io.StringIO(patched_json_str)
 
@@ -44,8 +72,7 @@ def patched_open(file, *args, **kwargs):
 builtins.open = patched_open
 
 # =========================================================================
-# 1. 【Aegis Namespace Bridge for Web UI】
-# Webサーバー(uvicorn)起動時にも古いシミュレータ名空間を pokepy へ自動リダイレクトするパッチ
+# 2. 【Aegis Namespace Bridge】
 # =========================================================================
 sys.modules['src.pokemon_battle_sim'] = types.ModuleType('src.pokemon_battle_sim')
 sys.modules['src.pokemon_battle_sim.pokemon'] = types.ModuleType('src.pokemon_battle_sim.pokemon')
@@ -65,19 +92,6 @@ sys.modules['src.pokemon_battle_sim.battle'].__dict__.update(battle_module.__dic
 sys.modules['src.pokemon_battle_sim.damage'].__dict__.update(pokemon_module.__dict__)
 # =========================================================================
 
-# =========================================================================
-# 2. 標準・外部ライブラリのロード
-# =========================================================================
-import time
-import warnings
-import numpy as np
-import cv2
-import mss  # 高速画面キャプチャライブラリ
-import urllib.request  # SDK不要でGemini APIと直接通信
-
-# =========================================================================
-# 3. 共通モジュールからのクリーンインポート
-# =========================================================================
 from pokepy.pokemon import Pokemon
 from pokepy.battle import Battle
 from pokepy.pokebot import Pokebot
@@ -86,18 +100,16 @@ from src.rebel.public_state import PublicBeliefState
 from src.rebel.cfr_solver import ReBeLSolver, CFRConfig
 from src.llm.state_representation import battle_to_llm_state
 
-# =========================================================================
-# 【テラスタル一時的完全禁止パッチ】
-# =========================================================================
 Battle.can_terastal = lambda self, player: False
 
 
+# =========================================================================
+# 3. 【高度化】AegisTeamBuilder (Word2Vec構築共起モデル統合)
+# =========================================================================
 class AegisTeamBuilder:
     """
     Project Aegis 構築自動生成システム (Layer 15)
-
-    指定された「軸(エース)」のポケモンをベースに、mbルールのプール(149種)から
-    タイプ補完(サイクル)とアイテム重複制限(Item Clause)を満たした6体構築を自動で構築・保存する。
+    Word2Vec による人間強者の共起シナジー(組まれやすさ)をタイプ補完とブレンドして6体チームを決定する。
     """
 
     def __init__(self, learnsets: Dict[str, List[str]], mb_pokemon: Set[str], mb_items: Set[str]):
@@ -105,8 +117,26 @@ class AegisTeamBuilder:
         self.mb_pokemon = mb_pokemon
         self.mb_items = mb_items
 
+        # Word2Vec共起モデルの安全ロード
+        self.w2v_model = None
+        w2v_path = "data/pokemon_word2vec.model"
+        if Word2Vec and os.path.exists(w2v_path):
+            try:
+                self.w2v_model = Word2Vec.load(w2v_path)
+                print(f"ℹ️ [Aegis Builder] Word2Vec 構築共起モデル '{w2v_path}' をロードしました。")
+            except Exception as e:
+                warnings.warn(f"Word2Vecモデルのロードに失敗しました(標準のタイプ補完にフォールバックします): {e}")
+
+    def get_w2v_synergy(self, member_name: str, candidate_name: str) -> float:
+        """Word2Vecベクトル空間上でのポケモン2体の共起度(組まれやすさ)を[0.0 ~ 1.0]で算出"""
+        if self.w2v_model is None:
+            return 0.0
+        try:
+            return float(self.w2v_model.wv.similarity(member_name, candidate_name))
+        except KeyError:
+            return 0.0
+
     def calculate_weaknesses(self, types: List[str]) -> List[str]:
-        """指定されたタイプの組み合わせに対する弱点タイプ（2倍以上）をリストアップする"""
         weaknesses = []
         for t_atk in Pokemon.type_id.keys():
             eff = 1.0
@@ -119,7 +149,6 @@ class AegisTeamBuilder:
         return weaknesses
 
     def calculate_resistances(self, types: List[str]) -> List[str]:
-        """指定されたタイプの組み合わせに対する耐性タイプ（0.5倍以下）をリストアップする"""
         resistances = []
         for t_atk in Pokemon.type_id.keys():
             eff = 1.0
@@ -132,18 +161,15 @@ class AegisTeamBuilder:
         return resistances
 
     def build_team(self, core_name: str) -> Dict[str, Any]:
-        """指定された『軸(エース)』から、mbルールに適合した6体構築を自動生成する"""
-        # 図鑑側のエイリアス補正（ギルガルド対応）
+        """軸(コア)に基づき、タイプ補完とWord2Vec共起シナジーをブレンドして6体構築を自動決定"""
         if core_name == "ギルガルド" and "ギルガルド" not in Pokemon.zukan:
             for k in ['ギルガルド(シールド)', 'ギルガルド（シールド）']:
                 if k in Pokemon.zukan:
                     Pokemon.zukan['ギルガルド'] = deepcopy(Pokemon.zukan[k])
                     Pokemon.zukan['ギルガルド']['display_name'] = 'ギルガルド'
-                    print(f"ℹ️ [Patch] Pokemon.zukan に '{k}' から 'ギルガルド' のエイリアスを生成しました。")
                     break
 
         if core_name not in Pokemon.zukan:
-            # 入力揺れの修正を試みる
             core_name = Pokemon.japanese_display_name.get(core_name, core_name)
             if core_name not in Pokemon.zukan and Pokemon.zukan_name.get(core_name):
                 core_name = Pokemon.zukan_name[core_name][0]
@@ -152,21 +178,18 @@ class AegisTeamBuilder:
 
         team_members = [core_name]
 
-        # サイクル補完評価に基づき、残りの5体を順に選出
         while len(team_members) < 6:
             current_weaknesses = []
             for member in team_members:
                 current_weaknesses += self.calculate_weaknesses(Pokemon.zukan[member]["type"])
 
             best_candidate = None
-            max_complement_score = -999.0
+            max_total_score = -999.0
 
-            # プール内の149体から探索
             for candidate in self.mb_pokemon:
                 if candidate in team_members:
                     continue
 
-                # 図鑑側のエイリアス動的適用
                 if candidate == "ギルガルド" and "ギルガルド" not in Pokemon.zukan:
                     for k in ['ギルガルド(シールド)', 'ギルガルド（シールド）']:
                         if k in Pokemon.zukan:
@@ -177,49 +200,45 @@ class AegisTeamBuilder:
                 if not Pokemon.zukan.get(candidate):
                     continue
 
-                # 同一のディスプレネーム（重複種）を避ける
                 if any(Pokemon.zukan[candidate]["display_name"] == Pokemon.zukan[m]["display_name"] for m in
                        team_members):
                     continue
 
-                # 候補ポケモンの耐性を取得
+                # A. タイプ補完スコア（耐性による弱点カバー）
                 cand_res = self.calculate_resistances(Pokemon.zukan[candidate]["type"])
+                type_score = sum(2.0 if w in cand_res else 0.0 for w in current_weaknesses)
+                type_score += sum(Pokemon.zukan[candidate]["base"]) * 0.001
 
-                # スコア計算: 現在のチームの弱点を、候補ポケモンがどれだけ半減以下でカバーできるか
-                score = sum(2.0 if w in cand_res else 0.0 for w in current_weaknesses)
+                # B. 【新規接続】Word2Vecによる人間強者構築の共起(組まれやすさ)スコア
+                w2v_score = 0.0
+                if self.w2v_model:
+                    # 既に選ばれたチームメンバー全員との平均共起度を算出
+                    synergies = [self.get_w2v_synergy(m, candidate) for m in team_members]
+                    w2v_score = sum(synergies) / len(team_members) if synergies else 0.0
 
-                # 種族値の高さも加味する
-                score += sum(Pokemon.zukan[candidate]["base"]) * 0.001
+                # 補完と共起をブレンド（重み比重 5.0 倍で調整）
+                total_score = type_score + (w2v_score * 5.0)
 
-                if score > max_complement_score:
-                    max_complement_score = score
+                if total_score > max_total_score:
+                    max_total_score = total_score
                     best_candidate = candidate
 
             if best_candidate:
                 team_members.append(best_candidate)
 
-        # -------------------------------------------------------------------------
-        # 3. 【進化的 Item Clause & 50%分岐メガシンカ配分（mb_items.txt 準拠）】 [1, 2]
-        # -------------------------------------------------------------------------
         assigned_items = {}
-
-        # mb_items の中から、メガストーン（"ナイト"を含むもの）と通常アイテムを完全に分離 [2]
         mega_stones_in_pool = {item for item in self.mb_items if "ナイト" in item}
         normal_items_pool = list(self.mb_items - mega_stones_in_pool)
 
-        # 重複を避けてランダムに配分するため、通常アイテムプールをシャッフル [2]
         random.shuffle(normal_items_pool)
         normal_item_idx = 0
 
         for member in team_members:
-            # メガシンカ可能なポケモンかチェック
             mega_stone_name = member.split("(")[0] + "ナイト"
 
-            # ➔ メガ枠でも50%の確率で通常アイテム（メガシンカしない選択肢）を持たせる
             if mega_stone_name in self.mb_items and random.random() < 0.5:
                 assigned_items[member] = mega_stone_name
             else:
-                # 通常アイテムから重複を避けて割り当て [2]
                 while normal_item_idx < len(normal_items_pool):
                     cand_item = normal_items_pool[normal_item_idx]
                     normal_item_idx += 1
@@ -229,19 +248,14 @@ class AegisTeamBuilder:
                 else:
                     assigned_items[member] = ""
 
-        # 4. 完成した6体のステータス、技、努力値を構築
         generated_party = {}
         for i, name in enumerate(team_members):
             zukan_entry = Pokemon.zukan[name]
-            base = zukan_entry["base"]
 
-            # ➔ 性格（Nature）の完全ランダム選択
             nature = random.choice(
                 ["いじっぱり", "ひかえめ", "ようき", "おくびょう", "わんぱく", "しんちょう", "おだやか", "ずぶとい"])
 
-            # ➔ 努力値（EV）の 50%極振り / 50%完全ランダム自動割り振り
             if random.random() < 0.5:
-                # 50%：極振りモード（ランダムに2つのステータスを252にし、残りのどこかに4を振る）
                 effort = [0] * 6
                 all_indices = [0, 1, 2, 3, 4, 5]
                 max_two = random.sample(all_indices, 2)
@@ -251,9 +265,8 @@ class AegisTeamBuilder:
                 last_four = random.choice(remaining)
                 effort[last_four] = 4
             else:
-                # 50%：完全ランダム（合計508、上限252、4の倍数分配）
                 effort = [0] * 6
-                total_units = 127  # 127 * 4 = 508
+                total_units = 127
                 for _ in range(total_units):
                     valid_indices = [idx for idx in range(6) if effort[idx] < 252]
                     if not valid_indices:
@@ -261,11 +274,9 @@ class AegisTeamBuilder:
                     idx = random.choice(valid_indices)
                     effort[idx] += 4
 
-            # ➔ 技のランダム選択（4枠未満ならパディングしない）
             learnable = self.learnsets.get(name, ["テラバースト"])
             moves = random.sample(learnable, min(4, len(learnable)))
 
-            # ➔ 特性（Ability）の完全ランダム選択
             abilities = zukan_entry.get("ability", ["とくせいなし"])
             ability = random.choice(abilities) if abilities else "とくせいなし"
 
@@ -282,7 +293,6 @@ class AegisTeamBuilder:
                 "effort": effort
             }
 
-        # 5. 生成されたパーティを party.log に保存（即時適用）
         os.makedirs("log", exist_ok=True)
         with open("log/party.log", "w", encoding="utf-8") as fout:
             json.dump(generated_party, fout, ensure_ascii=False, indent=2)
@@ -290,16 +300,67 @@ class AegisTeamBuilder:
         return generated_party
 
 
+# =========================================================================
+# 4. 【高度化】AegisTeamSelector (BERT選出予測の安全な統合)
+# =========================================================================
 class AegisTeamSelector:
     """
-    Project Aegis 相性補完型チームセレクター（選出最適化エンジン）
+    Project Aegis 相性補完型＆BERT予測型チームセレクター（選出最適化エンジン）
     """
 
     def __init__(self, learnsets: Dict[str, List[str]]):
         self.learnsets = learnsets
 
+        # BERT選出予測モデルの安全な動的ロード
+        self.bert_model = None
+        bert_path = "src/selection_bert/selection_bert.pth"
+
+        if torch and os.path.exists(bert_path):
+            try:
+                import importlib
+
+                # 1. 自身の物理位置から 'src' ディレクトリをパスに安全に追加
+                base_dir = os.path.dirname(os.path.abspath(__file__))
+                src_dir = os.path.join(base_dir, "src")
+                if src_dir not in sys.path:
+                    sys.path.append(src_dir)
+                if base_dir not in sys.path:
+                    sys.path.append(base_dir)
+
+                # 2. 静的解析警告を回避するために動的にインポートを実行
+                model_module = importlib.import_module("selection_bert.model")
+
+                # 3. model.py 内から PyTorchモデル(nn.Moduleを継承したクラス)を自動検出する
+                target_class = None
+
+                # 第一候補: SelectionBERT クラス
+                if hasattr(model_module, "SelectionBERT"):
+                    target_class = getattr(model_module, "SelectionBERT")
+                else:
+                    # 予備: 定義されているクラス群からnn.Moduleのサブクラスを探索
+                    for attr_name in dir(model_module):
+                        attr = getattr(model_module, attr_name)
+                        if isinstance(attr, type) and nn and issubclass(attr, nn.Module) and attr.__name__ != "Module":
+                            target_class = attr
+                            break
+
+                if target_score_class := target_class if 'target_class' in locals() else None:  # 安全策
+                    pass
+
+                # 見つかったクラスをインスタンス化
+                if target_class is not None:
+                    self.bert_model = target_class()
+                    self.bert_model.load_state_dict(torch.load(bert_path, map_location="cpu"))
+                    self.bert_model.eval()
+                    print(
+                        f"ℹ️ [Aegis Selector] 検出された選出予測モデル '{target_class.__name__}' を正常にロードしました。")
+                else:
+                    warnings.warn("selection_bert/model.py 内に有効な PyTorch モデルクラスが見つかりません。")
+
+            except Exception as e:
+                warnings.warn(f"SelectionBERTの動的ロードに失敗しました(相性総当たり評価にフォールバックします): {e}")
+
     def evaluate_matchup(self, my_poke: Pokemon, opp_poke: Pokemon) -> float:
-        """自分と相手のポケモンの1vs1における簡易有利度スコア"""
         score = 0.0
         my_moves = self.learnsets.get(my_poke.name, ["テラバースト"])
         opp_types = opp_poke.types
@@ -352,8 +413,27 @@ class AegisTeamSelector:
         score = best_my_eff - best_opp_eff
         return score
 
+    def get_bert_prob_score(self, combo: Tuple[int, ...], my_team: List[Pokemon], opp_team: List[Pokemon]) -> float:
+        """BERT選出モデルをロードして、指定された選出パターンの期待選出確率を出力"""
+        if self.bert_model is None or torch is None:
+            return 0.0
+        try:
+            # 簡略化した特徴量表現化（詳細なエンコーダーがあればそれを使用）
+            # ここではお互いのチームのポケモンの図鑑IDを入力とする
+            my_ids = torch.tensor([[Pokemon.zukan_name.get(p.name, [0])[0] for p in my_team]], dtype=torch.long)
+            opp_ids = torch.tensor([[Pokemon.zukan_name.get(p.name, [0])[0] for p in opp_team]], dtype=torch.long)
+
+            with torch.no_grad():
+                # 3体の期待確率（出力テンソル）
+                probs = self.bert_model(my_ids, opp_ids)
+                # 指定したインデックスの期待値合計を返す
+                score = float(sum(probs[0][idx].item() for idx in combo))
+                return score
+        except Exception:
+            return 0.0
+
     def select(self, my_team: List[Pokemon], opp_team: List[Pokemon], num_select: int = 3) -> List[int]:
-        """最適な3体（先発1、控え2）を選出するインデックスのリストを返す"""
+        """タイプ相性とBERT選出期待度を融合して、最適な選出インデックスのリストを返す"""
         if len(my_team) <= num_select:
             return list(range(len(my_team)))
 
@@ -364,6 +444,7 @@ class AegisTeamSelector:
         max_total_score = -999.0
 
         for combo in all_combinations:
+            # A. 相性総当たりスコア
             combo_score = 0.0
             for my_idx in combo:
                 my_poke = my_team[my_idx]
@@ -372,8 +453,14 @@ class AegisTeamSelector:
                     poke_score += self.evaluate_matchup(my_poke, opp_poke)
                 combo_score += poke_score
 
-            if combo_score > max_total_score:
-                max_total_score = combo_score
+            # B. BERT選出予測モデルによる確率スコア（利用可能な場合）
+            bert_score = self.get_bert_prob_score(combo, my_team, opp_team)
+
+            # 相性と予測確率をブレンド（重み比重 10.0 でブレンド）
+            total_score = combo_score + (bert_score * 10.0)
+
+            if total_score > max_total_score:
+                max_total_score = total_score
                 best_combination = combo
 
         selected_indices = list(best_combination)
@@ -393,26 +480,28 @@ class AegisTeamSelector:
         return final_selection
 
 
+# =========================================================================
+# 5. 【高度化】AegisAnalyzer (行動順・被ダメージからのベイズ逆算看破)
+# =========================================================================
 class AegisAnalyzer(Pokebot):
     """
     Project Aegis 戦略解析・配信観測AI（アナライザー）
+    画面OCRからのベイズ更新に加え、被ダメージ・行動順（すばやさ実数）による
+    多次元的なベイズ逆算看破エンジンを搭載。
     """
 
     def __init__(self, capture_box: Optional[Dict[str, int]] = None):
-        # 1. ハードウェア操作（nxbt）接続処理を自動バイパス
         original_name = os.name
-        os.name = 'nt'  # Windows扱いにして nxbt のロードを回避
+        os.name = 'nt'
         super().__init__()
         os.name = original_name
 
-        # 2. 画面キャプチャ(mss)のセットアップ (mss 警告対策に大文字 MSS に変更)
         try:
             self.sct = mss.MSS()
         except Exception:
             self.sct = None
         self.capture_box = capture_box
 
-        # 3. mbルール環境設定のロード（初期シーズンのカスタム設定）
         self.mb_pokemon: Set[str] = set()
         self.mb_items: Set[str] = set()
         self.mb_learnset: Dict[str, List[str]] = {}
@@ -422,27 +511,19 @@ class AegisAnalyzer(Pokebot):
         self.last_processed_buffer_len = 0
         self.current_turn_processed = -1
 
-        # 4. CFR/ReBeL ソルバーの初期化
         self.cfr_solver = ReBeLSolver(use_simplified=True, use_lightweight=False)
-
-        # 5. Aegis チームセレクター（選出最適化エンジン）の初期化
         self.team_selector = AegisTeamSelector(learnsets=self.mb_learnset)
 
-        # 6. Aegis チームビルダー（構築自動生成エンジン）の初期化 (Layer 15)
         self.team_builder = AegisTeamBuilder(
             learnsets=self.mb_learnset,
             mb_pokemon=self.mb_pokemon,
             mb_items=self.mb_items
         )
 
-        # 7. Gemini API キーの確認
         self.gemini_api_key = os.environ.get("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY")
-
-        # 8. デフォルトパーティファイルの自動生成（TeamBuilderを使用して生成）
         self._ensure_default_party_exists()
 
     def selection_command(self, player=0) -> List[int]:
-        """選出画面で最適な選出インデックスのリストを自動計算"""
         if player == 0:
             print("[Aegis Selection] 相手のパーティに対する最適な選出パターンを計算しています...")
             t0 = time.time()
@@ -463,19 +544,15 @@ class AegisAnalyzer(Pokebot):
             return list(range(3))
 
     def _ensure_default_party_exists(self) -> None:
-        """手持ちパーティログが存在しない場合、チームビルダーで自動構築する"""
         os.makedirs("log", exist_ok=True)
         path = "log/party.log"
         if not os.path.exists(path):
             print("⚠️ log/party.log が見つかりません。Aegis TeamBuilder で自動構築します。")
-            # 「ガブリアス」を軸とした最適な6体チームを自動設計
             self.team_builder.build_team("ガブリアス")
             print("✅ チームビルダーによる最強構築(1世代目)の自動生成が完了しました。")
 
     def _load_mb_rules(self) -> None:
-        """mbルールの定義ファイル群をロードし、シミュレータに注入する（絶対パス安全解決版）"""
         try:
-            # 自身のファイル物理位置からの絶対パス解決
             base_dir = os.path.dirname(os.path.abspath(__file__))
             pokemon_path = os.path.join(base_dir, "battle_data", "mb_pokemon.txt")
             items_path = os.path.join(base_dir, "battle_data", "mb_items.txt")
@@ -502,7 +579,6 @@ class AegisAnalyzer(Pokebot):
             warnings.warn(f"mbルールの定義ファイルが見つかりません。デフォルト確率にフォールバックします: {e}")
 
     def capture(self, filename=''):
-        """PCの画面を直接キャプチャして1080p画像に変換"""
         try:
             if self.sct is None:
                 return
@@ -520,7 +596,6 @@ class AegisAnalyzer(Pokebot):
             warnings.warn(f"画面キャプチャに失敗しました: {e}")
 
     def init_belief_state(self) -> None:
-        """相手のパーティが判明したタイミングでベイズモデルを初期化"""
         if not self.party[1]:
             return
 
@@ -547,7 +622,6 @@ class AegisAnalyzer(Pokebot):
             self.belief_state.beliefs[name] = self._build_flat_belief(name)
 
     def _build_flat_belief(self, pokemon_name: str) -> Dict[PokemonTypeHypothesis, float]:
-        """【初期シーズン専用】先入観ゼロのフラットな初期仮説群を生成する"""
         hypotheses: Dict[PokemonTypeHypothesis, float] = {}
 
         moves_pool = self.mb_learnset.get(pokemon_name, ["テラバースト"])
@@ -581,7 +655,6 @@ class AegisAnalyzer(Pokebot):
             )
             hypotheses[hypothesis] = 1.0
 
-        # 【堅牢化補正】self.belief_state が None の場合の安全策
         belief_state = self.belief_state
         if belief_state is None:
             belief_state = PokemonBeliefState.__new__(PokemonBeliefState)
@@ -598,7 +671,6 @@ class AegisAnalyzer(Pokebot):
             return hypotheses
 
     def translate_buffer_to_observation(self, dict_event: Dict[str, Any]) -> Optional[Observation]:
-        """OCRバッファをベイズ観測イベントに変換"""
         if dict_event.get("player") != 1:
             return None
 
@@ -638,14 +710,84 @@ class AegisAnalyzer(Pokebot):
 
         return None
 
+    def update_beliefs_by_implicit_observations(self) -> None:
+        """
+        【新規：多次元ベイズ更新】
+        対戦中に発生した非明示的なイベント（行動順、被ダメージ量）から
+        相手の素早さ(S)実数値、耐久努力値(H-B-D)、および突撃チョッキなどの所持仮説を逆算する。
+        """
+        if self.belief_state is None or self.pokemon[0] is None or self.pokemon[1] is None:
+            return
+
+        active_enemy = self.pokemon[1].name
+        if active_enemy not in self.belief_state.beliefs:
+            return
+
+        # 1. 技の行動順（すばやさ S の逆算）
+        # 同一優先度のコマンドを選択したのに自分が先攻（または後攻）だった場合、S実数値の確率を更新
+        if hasattr(self, 'speed_order') and self.speed_order:
+            # 簡略化：前ターンお互いが攻撃コマンドを選択していた場合
+            if self.turn > 1 and len(self.speed_order) >= 2:
+                fast_player = self.speed_order[0]
+                slow_player = self.speed_order[1]
+
+                my_s = self.pokemon[0].status[5]  # 自分の現在のS実数値
+
+                # 自分が先攻（相手が後攻）
+                if fast_player == 0 and slow_player == 1:
+                    for hyp in list(self.belief_state.beliefs[active_enemy].keys()):
+                        hyp_s = hyp.get_stats()[5]  # 相手の仮説S実数値
+                        if hyp_s >= my_s:
+                            # 相手の方がSが速いという仮説の確率を大幅に減衰
+                            self.belief_state.beliefs[active_enemy][hyp] *= 0.1
+
+                # 自分が後攻（相手が先攻）
+                elif fast_player == 1 and slow_player == 0:
+                    for hyp in list(self.belief_state.beliefs[active_enemy].keys()):
+                        hyp_s = hyp.get_stats()[5]
+                        if hyp_s <= my_s:
+                            # 相手の方がSが遅いという仮説の確率を大幅に減衰
+                            self.belief_state.beliefs[active_enemy][hyp] *= 0.1
+
+        # 2. ダメージ量による耐久型・チョッキの逆算
+        # 前のターンに自分が与えたダメージイベントを検出して逆引き計算
+        if calculate_damage and self.process_buffer:
+            last_events = self.process_buffer[-5:]  # 直近数件のイベント
+            dmg_events = [e for e in last_events if e.get("type") == "damage" and e.get("player") == 1]
+
+            for event in dmg_events:
+                dmg_percent = event.get("damage_percent")  # HPの減少比率
+                move_used = event.get("move")
+
+                if dmg_percent and move_used:
+                    for hyp in list(self.belief_state.beliefs[active_enemy].keys()):
+                        # 相手の仮説ステータスに基づいて、ダメージ計算を逆シミュレート
+                        min_dmg, max_dmg = calculate_damage(
+                            attacker=self.pokemon[0],
+                            defender_hyp=hyp,  # 相手の仮説
+                            move_name=move_used
+                        )
+                        # 実ダメージが計算値の乱数幅（チョッキ補正など含む）に収まっているか
+                        if min_dmg <= dmg_percent <= max_dmg:
+                            self.belief_state.beliefs[active_enemy][hyp] *= 1.5
+                        else:
+                            self.belief_state.beliefs[active_enemy][hyp] *= 0.2
+
+        # 3. 確率の再正規化
+        # BeliefState 側の正規化メソッドを呼び出すか、手動で処理
+        total = sum(self.belief_state.beliefs[active_enemy].values())
+        if total > 0:
+            for hyp in self.belief_state.beliefs[active_enemy]:
+                self.belief_state.beliefs[active_enemy][hyp] /= total
+
     def update_beliefs(self) -> None:
-        """ログバッファから信念を自動更新"""
         if self.belief_state is None:
             if self.party[1]:
                 self.init_belief_state()
             else:
                 return
 
+        # OCRバッファ（明示的観測）からの更新
         current_buffer_len = len(self.process_buffer)
         if current_buffer_len > self.last_processed_buffer_len:
             new_events = self.process_buffer[self.last_processed_buffer_len:]
@@ -657,8 +799,10 @@ class AegisAnalyzer(Pokebot):
 
             self.last_processed_buffer_len = current_buffer_len
 
+        # 行動順・ダメージ量（非明示的観測）からの更新を連動
+        self.update_beliefs_by_implicit_observations()
+
     def clone(self, player: int = None) -> Battle:
-        """脳内クローン（推論された世界を1つサンプリングして複製）"""
         battle_clone = deepcopy(self)
         if player is None or self.belief_state is None:
             return battle_clone
@@ -680,7 +824,6 @@ class AegisAnalyzer(Pokebot):
         return battle_clone
 
     def request_gemini_commentary(self, prompt: str) -> str:
-        """【Layer 17】Gemini APIから直接実況解説テキストを取得する"""
         if not self.gemini_api_key or self.gemini_api_key == "YOUR_GEMINI_API_KEY":
             return "※ [Aegis] APIキーが設定されていません。戦略数値のみを出力します。"
 
@@ -716,7 +859,6 @@ class AegisAnalyzer(Pokebot):
             return f"※ [Aegis Live Commentary] 解説の取得に失敗しました: {e}"
 
     def run_strategy_analysis(self) -> None:
-        """CFRゲーム理論解析 ＆ Geminiによるプロ級実況解説の出力"""
         self.update_beliefs()
         if self.belief_state is None or self.pokemon[0] is None or self.pokemon[1] is None:
             return
@@ -787,7 +929,6 @@ class AegisAnalyzer(Pokebot):
         print(f"==================================================\n")
 
     def _get_command_name(self, cmd: int, perspective_pokemon: Pokemon) -> str:
-        """コマンドIDから実況出力用の技名・交代先名を取得する"""
         if cmd == Battle.SURRENDER:
             return "降参 (Surrender)"
         elif cmd == Battle.STRUGGLE:
@@ -799,12 +940,11 @@ class AegisAnalyzer(Pokebot):
         elif cmd < 20:
             return f"テラスタル ➔ 技: 【{perspective_pokemon.moves[cmd % 10]}】"
         elif cmd in range(20, 26):
-            target_poke = self.selected[perspective_pokemon.sex != 1][cmd - 20]  # プレイヤーインデックス
+            target_poke = self.selected[perspective_pokemon.sex != 1][cmd - 20]
             return f"交代 ➔ 【{target_poke.name}】"
         return "様子見 / その他"
 
     def run_observer_loop(self) -> None:
-        """画面を監視し続け、解説を出力する常時監視ループ"""
         print("\n==================================================")
         print("  Project Aegis 観測・解説システム 起動中...")
         print("  対象ルール: カスタム mbルール (初期シーズン仕様)")
@@ -814,7 +954,7 @@ class AegisAnalyzer(Pokebot):
         print("  監視モード: Observer Mode")
         print("==================================================\n")
 
-        self.load_party()  # 自分のパーティ情報をロード
+        self.load_party()
         print("画面を監視しています。対戦画面が表示されるのを待っています...")
 
         while True:
@@ -828,10 +968,7 @@ class AegisAnalyzer(Pokebot):
                 self.reset_game()
                 self.read_enemy_party(capture=False)
 
-                # 選出最適化エンジンの実行 ➔ 相性に基づいた最適な3体を決定
                 self.selection_command(player=0)
-
-                # ベイズ確率モデルの自動初期化
                 self.init_belief_state()
                 self.selection_finished = True
                 self.turn = 0
@@ -867,21 +1004,15 @@ class AegisAnalyzer(Pokebot):
                             self.update_beliefs()
 
                 if (result := self.read_win_lose(capture=False)):
-                    print(f"\n【対戦終了検出】 結果は '{result}' でした。次の対戦を待機します。")
+                    print(f"\n【対戦終了検出】 結果は '{result}' ででした。次の対戦を待機します。")
                     self.reset_game()
 
             time.sleep(0.1)
 
 
-# デバッグ実行用エントリーポイント
 if __name__ == "__main__":
-    # シミュレータの初期化
     Pokemon.init(season=22)
 
-    # --------------------------------============================
-    # 【Aegisの根幹：キングシールド表記揺れ自動同期パッチ】
-    # データベース内の本物の 'キングズシールド' データを 'キングシールド' として再マッピングする
-    # =========================================================================
     for target_alias in ['キングズシールド', 'キング・シールド']:
         if target_alias in Pokemon.all_moves:
             Pokemon.all_moves['キングシールド'] = Pokemon.all_moves[target_alias]
@@ -889,34 +1020,15 @@ if __name__ == "__main__":
                 f"ℹ️ [Aegis Patch] 表記揺れ '{target_alias}' を本物の 'キングシールド' データとしてエイリアスマッピングしました。")
             break
 
-    # =========================================================================
-    # 【図鑑補正パッチ】Pokemon.zukan における 'ギルガルド' のキー欠損補正
-    # =========================================================================
     if hasattr(Pokemon, 'zukan'):
         if 'ギルガルド' not in Pokemon.zukan:
             for target_key in ['ギルガルド(シールド)', 'ギルガルド（シールド）']:
                 if target_key in Pokemon.zukan:
-                    # データをディープコピーして 'ギルガルド' キーを生成
                     Pokemon.zukan['ギルガルド'] = deepcopy(Pokemon.zukan[target_key])
                     Pokemon.zukan['ギルガルド']['display_name'] = 'ギルガルド'
                     print(f"ℹ️ [Patch] Pokemon.zukan に '{target_key}' から 'ギルガルド' のエイリアスを生成しました。")
                     break
 
-    # 画面キャプチャのターゲット設定（Noneの場合は全画面監視）
     my_box = None
-
-    # ----------------------------------------------------
-    # 【Aegis TeamBuilder デバッグ用コマンド】
-    # 新しい軸（エース）から、いつでもオリジナルの最強mbルール構築（6体）を
-    # 自動作成し、log/party.log に上書き保存できます。
-    #
-    # 例：カバルドン軸を作りたい場合、以下のコメントアウトを解除して1度だけ実行します。
-    # ----------------------------------------------------
-    # test_builder = AegisAnalyzer()
-    # test_builder.team_builder.build_team("カバルドン")
-    # print("カバルドン軸の構築を自動作成しました。")
-    # sys.exit(0)
-    # ----------------------------------------------------
-
     analyzer = AegisAnalyzer(capture_box=my_box)
     analyzer.run_observer_loop()
