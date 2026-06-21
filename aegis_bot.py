@@ -97,6 +97,36 @@ Battle.can_terastal = lambda self, player: False
 
 
 # =========================================================================
+# 🌟 グローバルヘルパー関数（メガストーン解決の共通化）
+# =========================================================================
+def get_possible_mega_stones(p_name: str) -> List[str]:
+    """ポケモンの日本語名から、データベース上に実在する正しいメガストーン候補のリストを返す"""
+    base = p_name.split("(")[0]
+    # データベース（GameWith wiki）の正確な固有名称マッピング
+    special_map = {
+        "リザードン": ["リザードナイトX", "リザードナイトY"],
+        "ライチュウ": ["ライチュウナイトX", "ライチュウナイトY"],
+        "ゲンガー": ["ゲンガナイト"],
+        "ヘルガー": ["ヘルガナイト"],
+        "ペンドラー": ["ペンドラナイト"],
+        "ユキノオー": ["ユキノオナイト"],
+        "ドラミドロ": ["ドラミドナイト"],
+        "ズルズキン": ["ズルズキナイト"],
+        "マフォクシー": ["マフォクシナイト"],
+        "ブリガロン": ["ブリガロナイト"],
+        "シビルドン": ["シビルドナイト"],
+        "ピクシー": ["ピクシナイト"],
+        "カラマネロ": ["カラマネナイト"],
+        "スターミー": ["スターミナイト"],
+        "ジジーロン": ["ジジーロナイト"],
+        "カイリュー": ["カイリュナイト"]
+    }
+    if base in special_map:
+        return special_map[base]
+    return [base + "ナイト"]
+
+
+# =========================================================================
 # 3. 【高度化】AegisTeamBuilder (対面・受け数理モデル搭載版)
 # =========================================================================
 class AegisTeamBuilder:
@@ -131,7 +161,7 @@ class AegisTeamBuilder:
         "さらさらいわ": 0.1,
         "しめったいわ": 0.1,
         "つめたいいわ": 0.1,
-        "いのちのたま": 2.0,  # 2.0 に修正しました
+        "いのちのたま": 2.0,  # 2.0 に調整
         "きれいなぬけがら": 0.15,
         "くろいてっきゅう": 0.1,
         "たつじんのおび": 1.5,
@@ -193,9 +223,9 @@ class AegisTeamBuilder:
         "しろいハーブ": 0.75,
         "メンタルハーブ": 0.5,
         "ようせいのハネ": 1.0,
-        "こだわりハチマキ": 2.5,  # 修正しました
-        "こだわりメガネ": 2.5,  # 修正しました
-        "とつげきチョッキ": 2.5,  # 修正しました
+        "こだわりハチマキ": 2.5,  # 2.5 に調整
+        "こだわりメガネ": 2.5,  # 2.5 に調整
+        "とつげきチョッキ": 2.5,  # 2.5 に調整
     }
 
     # 壁貼りサポート型として代表的な「ひかりのねんど」推奨ポケモン
@@ -203,7 +233,7 @@ class AegisTeamBuilder:
         "オーロンゲ", "ジャローダ", "アローラキュウコン"
     }
 
-    # 強力な特性：サンプリング時の基本評価を 2.0 倍にし、出現率を優先する
+    # 強力な特性：サンプリング時の基本評価を 2.0 倍にし、出現率を優先する（厳選された9種類）
     POWERFUL_ABILITIES = {
         "マルチスケイル", "ちからもち", "いたずらごころ",
         "ひでり", "あめふらし", "すなおこし",
@@ -505,11 +535,15 @@ class AegisTeamBuilder:
 
             # E. 持ち物サンプリング (技タイプへの「1.2倍アイテム動的適合性テスト」付き)
             assigned_item = ""
-            mega_stone_name = name.split("(")[0] + "ナイト"
 
-            if mega_stone_name in self.mb_items and random.random() < self.MEGA_PROBABILITIES.get(name, 0.50):
-                # メガストーンが解禁されており、かつ確率をパスした場合は持たせる
-                assigned_item = mega_stone_name
+            # 正しいメガストーン名候補を取得
+            mega_candidates = get_possible_mega_stones(name)
+            # mb_itemsに存在する本物の石だけを抽出
+            valid_mega_stones = [stone for stone in mega_candidates if stone in self.mb_items]
+
+            if valid_mega_stones and random.random() < self.MEGA_PROBABILITIES.get(name, 0.50):
+                # 解禁済みの正しいメガストーンをランダムに選択（リザードンならXかYが50%ずつになる）
+                assigned_item = random.choice(valid_mega_stones)
             else:
                 # 重複していない利用可能な持ち物プール
                 available_items = [itm for itm in normal_items_pool if itm not in assigned_items.values()]
@@ -880,9 +914,12 @@ class AegisAnalyzer(Pokebot):
         for _ in range(num_samples):
             moves = rng.sample(moves_pool, min(4, len(moves_pool)))
 
-            mega_stone_name = pokemon_name.split("(")[0] + "ナイト"
-            if mega_stone_name in item_pool and rng.random() < 0.5:
-                item = mega_stone_name
+            # 🌟 相手のメガストーンの仮説も、本物のWiki定義名に適合するものを動的にサンプリング（バグ①の修正）
+            mega_candidates = get_possible_mega_stones(pokemon_name)
+            valid_mega_stones = [stone for stone in mega_candidates if stone in item_pool]
+
+            if valid_mega_stones and rng.random() < 0.5:
+                item = rng.choice(valid_mega_stones)
             else:
                 item = rng.choice(item_pool)
 
@@ -1238,6 +1275,53 @@ class AegisAnalyzer(Pokebot):
 
 if __name__ == "__main__":
     Pokemon.init(season=22)
+
+    # 🌟 配信監視時、表記揺れを吸収して正しいポケモンインスタンスを解決するフック（バグ②の移植）
+    original_find = Pokemon.find
+
+
+    @classmethod
+    def patched_find(cls, pokemon_list, name=None, display_name=None):
+        res = original_find(pokemon_list, name=name, display_name=display_name)
+        if res is not None:
+            return res
+
+        if name:
+            base_name = name.replace("メガ", "").rstrip("XYＸＹ ").split("(")[0]
+            for p in pokemon_list:
+                p_base = p.name.replace("メガ", "").rstrip("XYＸＹ ").split("(")[0]
+                if p_base == base_name or p.display_name == base_name:
+                    return p
+
+        if pokemon_list:
+            return pokemon_list[0]
+        return None
+
+
+    Pokemon.find = patched_find
+
+    # 🌟 バシャーモやリザードンなどのメガシンカ表記揺れと分岐（X/Y）を解決するフック（バグ②の移植）
+    original_get_mega_name = Battle.get_mega_name
+
+
+    def patched_get_mega_name(self, p: Pokemon) -> str:
+        if not p or not p.item:
+            return ""
+
+        if p.name == "リザードン":
+            if "X" in p.item or "Ｘ" in p.item: return "メガリザードンX"
+            if "Y" in p.item or "Ｙ" in p.item: return "メガリザードンY"
+        elif p.name == "ミュウツー":
+            if "X" in p.item or "Ｘ" in p.item: return "メガミュウツーX"
+            if "Y" in p.item or "Ｙ" in p.item: return "メガミュウツーY"
+        elif p.name == "ライチュウ":
+            if "X" in p.item or "Ｘ" in p.item: return "メガライチュウX"
+            if "Y" in p.item or "Ｙ" in p.item: return "メガライチュウY"
+
+        return original_get_mega_name(self, p)
+
+
+    Battle.get_mega_name = patched_get_mega_name
 
     for target_alias in ['キングズシールド', 'キング・シールド']:
         if target_alias in Pokemon.all_moves:
