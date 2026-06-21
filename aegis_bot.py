@@ -102,11 +102,11 @@ Battle.can_terastal = lambda self, player: False
 class AegisTeamBuilder:
     """
     Project Aegis 構築自動生成システム (Layer 15)
-    Word2Vecの共起相関と、H-A-B-C-D-S実数値に基づく「対面性能・受け性能」の数理式を融合して構築。
+    Word2Vecによるシナジーと、性格・努力値・持ち物・特性・技の「重み付き対戦特化サンプリング」を統合。
     """
 
     MEGA_PROBABILITIES = {
-        "ライチュウ": 0.9, "ガブリアス": 0.1, "ムクホーク": 0.66, "ララグラーシ": 0.5,
+        "ライチュウ": 0.9, "ガブリアス": 0.1, "ムクホーク": 0.66, "ラグラージ": 0.5,
         "リザードン": 0.9, "メタグロス": 0.8, "バシャーモ": 0.5, "ギャラドス": 0.5,
         "カイリュー": 0.5, "キラフロル": 0.5, "クチート": 0.9, "ゲンガー": 0.66,
         "ドラミドロ": 0.66, "ハッサム": 0.66, "ミミロップ": 0.8, "メガニウム": 0.9,
@@ -315,7 +315,7 @@ class AegisTeamBuilder:
             return 0.0, 0.0
 
     def build_team(self, core_name: str, pokemon_weights: Optional[dict] = None) -> Dict[str, Any]:
-        """軸(コア)に基づき、対面・受け性能の数理評価、Word2Vec共起、型勝率重みをブレンドして構築"""
+        """軸(コア)に基づき、タイプ補完、Word2Vec共起、および動的な型勝率重みを反映して構築"""
         if core_name == "ギルガルド" and "ギルガルド" not in Pokemon.zukan:
             for k in ['ギルガルド(シールド)', 'ギルガルド（シールド）']:
                 if k in Pokemon.zukan:
@@ -359,7 +359,7 @@ class AegisTeamBuilder:
                        team_members):
                     continue
 
-                # A. 既存のタイプ相性補完基礎スコア
+                # A. 既存のタイプ相性補完スコア
                 cand_res = self.calculate_resistances(Pokemon.zukan[candidate]["type"])
                 type_score = sum(2.0 if w in cand_res else 0.0 for w in current_weaknesses)
                 type_score += sum(Pokemon.zukan[candidate]["base"]) * 0.001
@@ -372,11 +372,10 @@ class AegisTeamBuilder:
                     taimen_sum += taimen
                     uke_sum += uke
 
-                # 平均対面・受け性能を算出して加算 (比重調整用の定数倍を適用)
                 avg_taimen = taimen_sum / len(team_members)
                 avg_uke = uke_sum / len(team_members)
 
-                # 補正としてスコアに上乗せ
+                # 物理実数相性を評価スコアに上乗せブレンド
                 type_score += (avg_taimen * 0.01) + (avg_uke * 1.5)
 
                 # C. Word2Vecによる人間共起シナジースコア
@@ -400,12 +399,14 @@ class AegisTeamBuilder:
         normal_items_pool = list(self.mb_items - mega_stones_in_pool)
 
         for member in team_members:
+            # 図鑑データの特性スキャン
             zukan_entry = Pokemon.zukan.get(member, {})
             abilities = zukan_entry.get("ability", [])
 
             mega_stone_name = member.split("(")[0] + "ナイト"
 
             if mega_stone_name in self.mb_items:
+                # メガシンカ確率の動的決定 (ユーザーのカスタム重みを適用) [2]
                 mega_prob = self.MEGA_PROBABILITIES.get(member, 0.50)
                 if random.random() < mega_prob:
                     assigned_items[member] = mega_stone_name
@@ -414,9 +415,10 @@ class AegisTeamBuilder:
             # 通常持ち物の重複排除重み付き選定
             available_items = [item for item in normal_items_pool if item not in assigned_items.values()]
             if available_items:
+                # ポケモンごとにローカルのアイテム重みテーブルをコピーして動的補正
                 local_item_tiers = dict(self.ITEM_TIERS)
 
-                # 天候発動特性を検知した場合、対応する「いわ（岩）」の重みを動的ブースト
+                # 🌟 要望: 天候発動特性を検知した場合、対応する「いわ（岩）」の重みを動的ブースト [2]
                 if "ひでり" in abilities:
                     local_item_tiers["あついいわ"] = 5.0
                 if "あめふらし" in abilities:
@@ -426,7 +428,7 @@ class AegisTeamBuilder:
                 if "ゆきふらし" in abilities:
                     local_item_tiers["つめたいいわ"] = 5.0
 
-                # 主要な壁貼り要員を検知した場合、「ひかりのねんど」の重みを動的ブースト
+                # 🌟 要望: 主要な壁貼り要員を検知した場合、「ひかりのねんど」の重みを動的ブースト [2]
                 base_member_name = member.split("(")[0]
                 if base_member_name in self.WALL_SETTER_POKEMON:
                     local_item_tiers["ひかりのねんど"] = 5.0
