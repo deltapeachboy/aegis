@@ -6,6 +6,8 @@ import json
 import io
 import time
 import random
+import warnings  # 🌟 インポート漏れ修正
+from typing import Any  # 🌟 インポート漏れ修正
 from copy import deepcopy
 from collections import Counter
 
@@ -67,18 +69,27 @@ from train_value_network import train_model
 # =========================================================================
 # 3. 環境適応型（重み付き）チーム生成システム
 # =========================================================================
-def generate_evolved_team(builder: AegisTeamBuilder, weights: dict[str, float]) -> list:
-    """環境の勝率（重み）に基づき、優秀な個体を引き当てて6体構築を生成する"""
+def generate_evolved_team(builder: AegisTeamBuilder, weights: dict[str, Any]) -> list:
+    """環境の勝率（重み）、および型重みに基づき、優秀な個体・型を引き当てて6体構築を生成する"""
     candidates = list(builder.mb_pokemon)
 
     # 重みリストの作成（未登録のものはデフォルト値 1.0）
-    prob_weights = [weights.get(name, 1.0) for name in candidates]
+    prob_weights = []
+    for name in candidates:
+        val = weights.get(name, 1.0)
+        if isinstance(val, dict):
+            prob_weights.append(val.get("weight", 1.0))
+        else:
+            prob_weights.append(float(val))
+
     if sum(prob_weights) == 0:
         prob_weights = [1.0] * len(candidates)
 
     # 重み付きランダムサンプリングで軸を決定
     random_core = random.choices(candidates, weights=prob_weights, k=1)[0]
-    team_dict = builder.build_team(random_core)
+
+    # 軸ポケモンに対応する個別の型重みをビルダーに渡してチームを決定
+    team_dict = builder.build_team(random_core, pokemon_weights=weights)
 
     # シミュレータオブジェクトへの復元とデータ型安全変換
     selected_team = []
@@ -104,10 +115,12 @@ def generate_evolved_team(builder: AegisTeamBuilder, weights: dict[str, float]) 
         p.moves = team_dict[s]['moves']
 
         ind_data = team_dict[s].get('indiv', [31] * 6)
-        p.indiv = [ind_data.get(k, 31) for k in ["H", "A", "B", "C", "D", "S"]] if isinstance(ind_data, dict) else ind_data
+        p.indiv = [ind_data.get(k, 31) for k in ["H", "A", "B", "C", "D", "S"]] if isinstance(ind_data,
+                                                                                              dict) else ind_data
 
         eff_data = team_dict[s].get('effort', [0] * 6)
-        p.effort = [eff_data.get(k, 0) for k in ["H", "A", "B", "C", "D", "S"]] if isinstance(eff_data, dict) else eff_data
+        p.effort = [eff_data.get(k, 0) for k in ["H", "A", "B", "C", "D", "S"]] if isinstance(eff_data,
+                                                                                              dict) else eff_data
 
         p.update_status()
         selected_team.append(p)
@@ -115,17 +128,24 @@ def generate_evolved_team(builder: AegisTeamBuilder, weights: dict[str, float]) 
 
 
 # =========================================================================
-# 4. 世代別環境ログ解析システム
+# 4. 世代別環境ログ解析システム（型情報：技、特性、性格の勝敗集計） [2]
 # =========================================================================
 def analyze_generation_meta(log_path: str) -> dict:
-    """その世代の自己対戦結果を集計し、ポケモンの勝率・持ち物・技使用率を算出する"""
+    """その世代の自己対戦結果を集計し、勝率および技、性格、特性の勝利実績を算出する"""
     if not os.path.exists(log_path):
         return {}
 
     pokemon_picks = Counter()
     pokemon_wins = Counter()
     pokemon_items = {}
-    pokemon_moves = {}
+
+    # 技、特性、性格ごとの勝利数と敗北数の集計
+    move_picks = {}
+    move_wins = {}
+    ability_picks = {}
+    ability_wins = {}
+    nature_picks = {}
+    nature_wins = {}
 
     with open(log_path, "r", encoding="utf-8") as f:
         for line in f:
@@ -146,6 +166,9 @@ def analyze_generation_meta(log_path: str) -> dict:
                     item = poke["item"]
                     moves = poke["moves"]
 
+                    nature = poke.get("nature", "いじっぱり")
+                    ability = poke.get("ability", "とくせいなし")
+
                     pokemon_picks[name] += 1
                     if pl == winner:
                         pokemon_wins[name] += 1
@@ -154,10 +177,25 @@ def analyze_generation_meta(log_path: str) -> dict:
                         pokemon_items[name] = Counter()
                     pokemon_items[name][item] += 1
 
-                    if name not in pokemon_moves:
-                        pokemon_moves[name] = Counter()
+                    # 🌟 技・特性・性格の統計集計
+                    if name not in move_picks:
+                        move_picks[name] = Counter()
+                        move_wins[name] = Counter()
+                        ability_picks[name] = Counter()
+                        ability_wins[name] = Counter()
+                        nature_picks[name] = Counter()
+                        nature_wins[name] = Counter()
+
+                    nature_picks[name][nature] += 1
+                    ability_picks[name][ability] += 1
+                    if pl == winner:
+                        nature_wins[name][nature] += 1
+                        ability_wins[name][ability] += 1
+
                     for m in moves:
-                        pokemon_moves[name][m] += 1
+                        move_picks[name][m] += 1
+                        if pl == winner:
+                            move_wins[name][m] += 1
 
     meta_report = {}
     for name, picks in pokemon_picks.items():
@@ -165,14 +203,35 @@ def analyze_generation_meta(log_path: str) -> dict:
         win_rate = wins / picks if picks > 0 else 0.0
 
         top_item = pokemon_items[name].most_common(1)[0][0] if name in pokemon_items else ""
-        top_moves = [m[0] for m in pokemon_moves[name].most_common(4)] if name in pokemon_moves else []
+        top_moves = [m[0] for m in move_picks[name].most_common(4)] if name in move_picks else []
+
+        moves_meta = {}
+        if name in move_picks:
+            for m, m_picks in move_picks[name].items():
+                m_wins = move_wins[name][m]
+                moves_meta[m] = m_wins / m_picks if m_picks > 0 else 0.0
+
+        abilities_meta = {}
+        if name in ability_picks:
+            for ab, ab_picks in ability_picks[name].items():
+                ab_wins = ability_wins[name][ab]
+                abilities_meta[ab] = ab_wins / ab_picks if ab_picks > 0 else 0.0
+
+        natures_meta = {}
+        if name in nature_picks:
+            for nat, nat_picks in nature_picks[name].items():
+                nat_wins = nature_wins[name][nat]
+                natures_meta[nat] = nat_wins / nat_picks if nat_picks > 0 else 0.0
 
         meta_report[name] = {
             "picks": picks,
             "wins": wins,
             "win_rate": round(win_rate, 3),
             "preferred_item": top_item,
-            "preferred_moves": top_moves
+            "preferred_moves": top_moves,
+            "moves_win_rate": moves_meta,
+            "abilities_win_rate": abilities_meta,
+            "natures_win_rate": natures_meta
         }
 
     return meta_report
@@ -183,25 +242,21 @@ def analyze_generation_meta(log_path: str) -> dict:
 # =========================================================================
 def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector: AegisTeamSelector, cfr_solver,
                               analyzer, weights: dict) -> dict:
-    """環境適合率（重み）に基づき生成されたチーム同士の対戦シミュレーション"""
     match_seed = int(time.time() * 1000) % 1000000
     battle = Battle(seed=match_seed)
 
-    # 重み付き構築の生成
     team_p0 = generate_evolved_team(builder, weights)
     team_p1 = generate_evolved_team(builder, weights)
 
     battle.selected[0] = team_p0
     battle.selected[1] = team_p1
 
-    # 3体選出フェーズ (内部でBERT予測モデルが有効なら、自動的に期待確率をブレンド)
     sel_p0 = selector.select(team_p0, team_p1, num_select=3)
     sel_p1 = selector.select(team_p1, team_p0, num_select=3)
 
     battle.selected[0] = [deepcopy(team_p0[i]) for i in sel_p0]
     battle.selected[1] = [deepcopy(team_p1[i]) for i in sel_p1]
 
-    # 不完全情報用の信念状態を初期化
     beliefs = [
         PokemonBeliefState.__new__(PokemonBeliefState),
         PokemonBeliefState.__new__(PokemonBeliefState)
@@ -221,14 +276,12 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
         for name in opp_names:
             beliefs[pl].beliefs[name] = analyzer._build_flat_belief(name)
 
-    # 0ターン目の繰り出し
     battle.turn = 0
     for player in range(2):
         battle.change_pokemon(player, idx=0, landing=False)
     for player in battle.speed_order:
         battle.land(player)
 
-    # ターン解決ループ
     history_log = []
     while battle.winner() is None:
         battle.turn += 1
@@ -247,13 +300,6 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
         battle.command = commands
         battle.proceed(commands=commands)
 
-        # 非明示的な観測（被ダメージや行動順など）からのベイズ更新を対戦中も駆動
-        for pl in [0, 1]:
-            # ダメージやS関係の逆引きを擬似再現
-            if hasattr(analyzer, 'update_beliefs_by_implicit_observations'):
-                # 脳内の実戦シミュレーション時にも不等式およびダメージ評価を自動反映
-                pass
-
         history_log.append({
             "turn": battle.turn,
             "commands": commands,
@@ -269,8 +315,10 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
         "match_id": match_id,
         "seed": match_seed,
         "teams": [
-            [{"name": p.name, "item": p.item, "moves": p.moves} for p in team_p0],
-            [{"name": p.name, "item": p.item, "moves": p.moves} for p in team_p1]
+            [{"name": p.name, "item": p.item, "moves": p.moves, "nature": p.nature, "ability": p.ability} for p in
+             team_p0],
+            [{"name": p.name, "item": p.item, "moves": p.moves, "nature": p.nature, "ability": p.ability} for p in
+             team_p1]
         ],
         "selections": [sel_p0, sel_p1],
         "winner": winner,
@@ -282,7 +330,6 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
 # 6. 世代進化パイプラインメインループ (1000世代 & 自動再開仕様)
 # =========================================================================
 def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40):
-    """世代交代の強化学習、メタ変遷の統計処理、およびTop 3の構築抽出・保存を実行する"""
     Pokemon.init(season=22)
 
     for target_alias in ['キングズシールド', 'キング・シールド', 'キングズ・シールド']:
@@ -295,12 +342,32 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
     selector = analyzer.team_selector
     cfr_solver = analyzer.cfr_solver
 
-    pokemon_weights = {name: 1.0 for name in builder.mb_pokemon}
+    # 1. 世代初期重みのロードとマイグレーション
+    pokemon_weights = {}
     weights_path = "log/meta_weights.json"
+
+    for name in builder.mb_pokemon:
+        pokemon_weights[name] = {
+            "weight": 1.0,
+            "moves": {},
+            "abilities": {},
+            "natures": {}
+        }
+
     if os.path.exists(weights_path):
-        with open(weights_path, "r", encoding="utf-8") as f:
-            pokemon_weights.update(json.load(f))
-        print("ℹ️ Existing meta weights loaded.")
+        try:
+            with open(weights_path, "r", encoding="utf-8") as f:
+                loaded_weights = json.load(f)
+
+            for name, val in loaded_weights.items():
+                if name in pokemon_weights:
+                    if isinstance(val, (int, float)):
+                        pokemon_weights[name]["weight"] = float(val)
+                    elif isinstance(val, dict):
+                        pokemon_weights[name].update(val)
+            print("ℹ️ Existing meta weights loaded and migrated successfully.")
+        except Exception as e:
+            warnings.warn(f"重みデータのパース・移行に失敗しました(リセットして続行します): {e}")
 
     # 自動再開スキャン
     start_generation = 1
@@ -315,7 +382,7 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
     print(f"  総世代数: {total_generations}世代")
     print(f"  世代ごとの対戦数: {matches_per_gen}回戦")
     if start_generation > 1:
-        print(f"  ✨ 既存の 1～{start_generation-1} 世代のデータを検出しました。")
+        print(f"  ✨ 既存の 1～{start_generation - 1} 世代のデータを検出しました。")
         print(f"  🔄 第 {start_generation} 世代からシミュレーションを再開します。")
     print("==================================================\n")
 
@@ -340,14 +407,31 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
                     import traceback
                     traceback.print_exc()
 
+        # 世代メタの統計解析
         meta_report = analyze_generation_meta(gen_log_path)
 
+        # 型重みの勝率連動学習
         learning_rate = 0.5
         for name, stats in meta_report.items():
             if name in pokemon_weights:
                 win_rate = stats["win_rate"]
                 weight_delta = 1.0 + learning_rate * (win_rate - 0.5)
-                pokemon_weights[name] = max(0.1, min(10.0, pokemon_weights[name] * weight_delta))
+                pokemon_weights[name]["weight"] = max(0.1, min(10.0, pokemon_weights[name]["weight"] * weight_delta))
+
+                for m, m_win_rate in stats.get("moves_win_rate", {}).items():
+                    m_delta = 1.0 + learning_rate * (m_win_rate - 0.5)
+                    current_m_w = pokemon_weights[name]["moves"].get(m, 1.0)
+                    pokemon_weights[name]["moves"][m] = max(0.1, min(10.0, current_m_w * m_delta))
+
+                for ab, ab_win_rate in stats.get("abilities_win_rate", {}).items():
+                    ab_delta = 1.0 + learning_rate * (ab_win_rate - 0.5)
+                    current_ab_w = pokemon_weights[name]["abilities"].get(ab, 1.0)
+                    pokemon_weights[name]["abilities"][ab] = max(0.1, min(10.0, current_ab_w * ab_delta))
+
+                for nat, nat_win_rate in stats.get("natures_win_rate", {}).items():
+                    nat_delta = 1.0 + learning_rate * (nat_win_rate - 0.5)
+                    current_nat_w = pokemon_weights[name]["natures"].get(nat, 1.0)
+                    pokemon_weights[name]["natures"][nat] = max(0.1, min(10.0, current_nat_w * nat_delta))
 
         os.makedirs("log", exist_ok=True)
         with open(weights_path, "w", encoding="utf-8") as f_out:
@@ -377,7 +461,7 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
             if len(sorted_meta) >= rank:
                 top_poke_name = sorted_meta[rank - 1][0]
                 try:
-                    rank_party = builder.build_team(top_poke_name)
+                    rank_party = builder.build_team(top_poke_name, pokemon_weights=pokemon_weights)
 
                     rank_path = f"log/party_gen{gen}_rank{rank}.json"
                     shortcut_path = f"log/party_rank{rank}.json"
@@ -387,7 +471,8 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
                     with open(shortcut_path, "w", encoding="utf-8") as f_short:
                         json.dump(rank_party, f_short, ensure_ascii=False, indent=2)
 
-                    print(f"   - {rank}位軸: 【{top_poke_name}】 (勝利数: {sorted_meta[rank-1][1]['wins']}) ➔ {rank_path} に保存完了")
+                    print(
+                        f"   - {rank}位軸: 【{top_poke_name}】 (勝利数: {sorted_meta[rank - 1][1]['wins']}) ➔ {rank_path} に保存完了")
                 except Exception as e:
                     print(f"   - {rank}位軸: {top_poke_name} の構築生成中にエラーが発生しました: {e}")
 
@@ -406,7 +491,8 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
         print(f"==================================================")
         for rank, (name, info) in enumerate(display_meta, 1):
             preferred_moves = ", ".join(info["preferred_moves"])
-            print(f"  {rank}位: 【{name}】 (勝率: {info['win_rate']:.1%}, 勝利数(Wins): {info['wins']}, 選出回数(Picks): {info['picks']})")
+            print(
+                f"  {rank}位: 【{name}】 (勝率: {info['win_rate']:.1%}, 勝利数(Wins): {info['wins']}, 選出回数(Picks): {info['picks']})")
             print(f"       ┗ 最頻持ち物: {info['preferred_item']} | 頻出技: [{preferred_moves}]")
         print(f"==================================================\n")
 
@@ -493,7 +579,6 @@ if __name__ == "__main__":
 
     Battle.proceed = patched_proceed
 
-    # ギルガルド・キングシールドの表記揺れ自動同期
     for target_alias in ['キングズシールド', 'キング・シールド', 'キングズ・シールド']:
         if target_alias in Pokemon.all_moves:
             Pokemon.all_moves['キングシールド'] = Pokemon.all_moves[target_alias]

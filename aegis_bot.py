@@ -97,7 +97,7 @@ Battle.can_terastal = lambda self, player: False
 
 
 # =========================================================================
-# 3. 【高度化】AegisTeamBuilder (重み付き型構築システム搭載) [2]
+# 3. 【高度化】AegisTeamBuilder (指定重みメガシンカ確率搭載版) [2]
 # =========================================================================
 class AegisTeamBuilder:
     """
@@ -105,32 +105,30 @@ class AegisTeamBuilder:
     Word2Vecによるシナジーと、性格・努力値・持ち物・特性・技の「重み付き対戦特化サンプリング」を統合。
     """
 
-    # 1. メガシンカ確率の重み付け (通常が強すぎる枠は33%, メガ必須枠は66%)
+    # 🌟 ユーザー指定：メガシンカ確率の重み付けを反映 [2]
     MEGA_PROBABILITIES = {
-        "スピアー": 0.66, "クチート": 0.66, "ガルーラ": 0.66, "ボスゴドラ": 0.66,
-        "チャーレム": 0.66, "ヤミラミ": 0.66, "ライボルト": 0.66, "ジュペッタ": 0.66,
-        "アブソル": 0.66, "オニゴーリ": 0.66, "ピジョット": 0.66, "ヘルガー": 0.66,
-        "エルレイド": 0.66, "サメハダー": 0.66, "バクーダ": 0.66, "チルタリス": 0.66,
-        "ガブリアス": 0.33, "ボーマンダ": 0.33, "バンギラス": 0.33, "ギャラドス": 0.33,
-        "メタグロス": 0.33, "ゲンガー": 0.33, "ハッサム": 0.33, "カイリュー": 0.33,
-        "ヘラクロス": 0.33, "エアームド": 0.33, "シビルドン": 0.33, "シャンデラ": 0.33,
-        "ドリュウズ": 0.33, "ブリガロン": 0.33, "マフォクシー": 0.33, "カラマネロ": 0.33,
-        "ゲッコウガ": 0.33, "ドラミドロ": 0.33, "ルチャブル": 0.33, "タイレーツ": 0.33,
-        "スコヴィラン": 0.33, "キラフロル": 0.33
+        "ライチュウ": 0.9, "ガブリアス": 0.1, "ムクホーク": 0.66, "ラグラージ": 0.5,
+        "リザードン": 0.9, "メタグロス": 0.8, "バシャーモ": 0.5, "ギャラドス": 0.5,
+        "カイリュー": 0.5, "キラフロル": 0.5, "クチート": 0.9, "ゲンガー": 0.66,
+        "ドラミドロ": 0.66, "ハッサム": 0.66, "ミミロップ": 0.8, "メガニウム": 0.9,
+        "マフォクシー": 0.8, "ゲッコウガ": 0.5, "スターミー": 0.9, "フラエッテ(えいえん)": 0.8,
+        "フシギバナ": 0.8, "ルカリオ": 0.8, "ウツボット": 0.8, "シャンデラ": 0.66,
+        "カメックス": 0.8, "バンギラス": 0.45, "ブリガロン": 0.66, "ガルーラ": 0.85,
+        "ヤドラン": 0.5, "ピクシー": 0.5, "ユキメノコ": 0.66, "シビルドン": 0.8,
+        "ドリュウズ": 0.33, "サーナイト": 0.5, "ヤミラミ": 0.66, "スコヴィラン": 0.5,
+        "カエンジシ": 0.66, "ペンドラー": 0.5, "ガメノデス": 0.75, "ジュカイン": 0.7,
+        "エアームド": 0.5, "エルレイド": 0.4, "ズルズキン": 0.8, "ユキノオー": 0.5,
+        "ジュペッタ": 0.7
     }
 
-    # 2. 強力な持ち物の傾斜重み (強い持ち物を高確率で優先配分)
     ITEM_TIERS = {
-        # S Tier (重み 5.0)
         "きあいのタスキ": 5.0, "こだわりハチマキ": 5.0, "こだわりメガネ": 5.0, "こだわりスカーフ": 5.0,
         "とつげきチョッキ": 5.0, "いのちのたま": 5.0, "たべのこし": 5.0, "オボンのみ": 5.0, "ラムのみ": 5.0,
-        # A Tier (重み 2.0)
         "ゴツゴツメット": 2.0, "あつぞこブーツ": 2.0, "しんかのきせき": 2.0, "おうじゃのしるし": 2.0,
         "しろいハーブ": 2.0, "たつじんのおび": 2.0, "ピントレンズ": 2.0, "おおきなねっこ": 2.0,
         "ヨプのみ": 2.0, "ヤチェのみ": 2.0, "シュカのみ": 2.0, "オッカのみ": 2.0, "ロゼルのみ": 2.0,
         "リンドのみ": 2.0, "バコウのみ": 2.0, "ソクノのみ": 2.0, "ハバンのみ": 2.0, "ビアーのみ": 2.0,
         "イトケのみ": 2.0, "ホズのみ": 2.0, "カシブのみ": 2.0, "ナモのみ": 2.0, "タンガのみ": 2.0,
-        # B Tier (重み 1.0)
         "メタルコート": 1.0, "しんぴのしずく": 1.0, "やわらかいすな": 1.0, "きせきのタネ": 1.0,
         "もくたん": 1.0, "じしゃく": 1.0, "とけないこおり": 1.0, "まがったスプーン": 1.0,
         "かたいいし": 1.0, "のろいのおふだ": 1.0, "りゅうのキバ": 1.0, "くろおび": 1.0,
@@ -138,7 +136,6 @@ class AegisTeamBuilder:
         "ヒメリのみ": 1.0, "クラボのみ": 1.0, "チーゴのみ": 1.0, "ナナシのみ": 1.0, "オレンのみ": 1.0,
     }
 
-    # 3. 強特性の選定バイアス (強特性は66% / その他は33%の確率比で選択)
     POWERFUL_ABILITIES = {
         "てんねん", "へんげんじざい", "かそく", "いかく", "マルチスケイル", "いたずらごころ",
         "ちからもち", "ポイズンヒール", "テクニシャン", "きれあじ", "おうごんのからだ",
@@ -146,16 +143,14 @@ class AegisTeamBuilder:
         "ダウンロード", "トレース", "バトルスイッチ", "おやこあい", "マジックミラー", "かげふみ"
     }
 
-    # 4. 実戦性格の傾斜配分 (主要アタッカー性格に72%のウェイトを配分)
     NATURE_WEIGHTS = {
         "いじっぱり": 0.18, "ひかえめ": 0.18, "ようき": 0.18, "おくびょう": 0.18,
         "わんぱく": 0.07, "しんちょう": 0.07, "ずぶとい": 0.07, "おだやか": 0.07
     }
 
-    # 5. 強力な変化・サポート・展開技の定義 (技構成の重み付けに使用)
     POWERFUL_MOVES_KEYWORDS = {
         "ステルスロック", "あくび", "ちょうはつ", "おにび", "でんじは", "へびにらみ", "ねばねばネット",
-        "つるぎのまい", "りゅうのまい", "ちょうのまい", "めいそん", "てっぺき", "ビルドアップ",
+        "つるぎのまい", "りゅうのまい", "ちょうのまい", "めいそう", "てっぺき", "ビルドアップ",
         "なまける", "じこさいせい", "はねやすめ", "こうごうせい", "ちからをすいとる",
         "キングシールド", "トーチカ", "ニードルガード", "アンコール", "いたみわけ", "しっぽきり"
     }
@@ -206,7 +201,8 @@ class AegisTeamBuilder:
                 resistances.append(t_atk)
         return resistances
 
-    def build_team(self, core_name: str) -> Dict[str, Any]:
+    def build_team(self, core_name: str, pokemon_weights: Optional[dict] = None) -> Dict[str, Any]:
+        """軸(コア)に基づき、タイプ補完、Word2Vec共起、および動的な型勝率重みを反映して構築"""
         if core_name == "ギルガルド" and "ギルガルド" not in Pokemon.zukan:
             for k in ['ギルガルド(シールド)', 'ギルガルド（シールド）']:
                 if k in Pokemon.zukan:
@@ -223,7 +219,7 @@ class AegisTeamBuilder:
 
         team_members = [core_name]
 
-        # 1. 軸に基づいたメンバー5体の決定 (補完 ＆ 共起シナジー)
+        # 1. メンバー選定ループ
         while len(team_members) < 6:
             current_weaknesses = []
             for member in team_members:
@@ -268,52 +264,59 @@ class AegisTeamBuilder:
             if best_candidate:
                 team_members.append(best_candidate)
 
-        # 2. 重み付きアイテム決定ロジック [2]
+        # 2. 重み付きアイテム配分 (Item Clause)
         assigned_items = {}
         mega_stones_in_pool = {item for item in self.mb_items if "ナイト" in item}
         normal_items_pool = list(self.mb_items - mega_stones_in_pool)
 
-        # メンバーごとにメガシンカ可能なら「設定された確率重み」でストーンを割り当て
         for member in team_members:
             mega_stone_name = member.split("(")[0] + "ナイト"
 
             if mega_stone_name in self.mb_items:
-                # ユーザー要求: メガシンカ確率を33%～66%の確率重みに動的設定 [2]
+                # メガシンカ確率の動的決定 (ユーザーのカスタム重みを適用) [2]
                 mega_prob = self.MEGA_PROBABILITIES.get(member, 0.50)
-
                 if random.random() < mega_prob:
                     assigned_items[member] = mega_stone_name
                     continue
 
-            # メガに選ばれなかった場合、通常の持ち物から重複なしで重み付き選定
+            # 通常持ち物の重複排除重み付き選定
             available_items = [item for item in normal_items_pool if item not in assigned_items.values()]
             if available_items:
-                # ユーザー要求: 持ち物の強さに合わせて重み(確率)付きサンプリング [2]
                 item_weights = [self.ITEM_TIERS.get(itm, 0.1) for itm in available_items]
                 chosen_item = random.choices(available_items, weights=item_weights, k=1)[0]
                 assigned_items[member] = chosen_item
             else:
                 assigned_items[member] = ""
 
-        # 3. 特性・性格・努力値・技構成の重み付き組み立て [2]
+        # 3. 特性・性格・努力値・技構成の動的重み付き組み立て
         generated_party = {}
         for i, name in enumerate(team_members):
             zukan_entry = Pokemon.zukan[name]
 
-            # ユーザー要求: 性格の実戦重み付きランダム配分
-            natures = list(self.NATURE_WEIGHTS.keys())
-            nature_w = list(self.NATURE_WEIGHTS.values())
-            nature = random.choices(natures, weights=nature_w, k=1)[0]
+            dyn_data = pokemon_weights.get(name, {}) if pokemon_weights else {}
 
-            # ユーザー要求: 特性の強さに応じた重み付き選定 (強特性=2.0、その他=1.0)
+            # 性格の選定
+            natures = list(self.NATURE_WEIGHTS.keys())
+            nature_weights = []
+            for nat in natures:
+                static_w = self.NATURE_WEIGHTS[nat]
+                dynamic_w = dyn_data.get("natures", {}).get(nat, 1.0)
+                nature_weights.append(static_w * dynamic_w)
+            nature = random.choices(natures, weights=nature_weights, k=1)[0]
+
+            # 特性の選定
             abilities = zukan_entry.get("ability", ["とくせいなし"])
             if abilities:
-                ability_weights = [2.0 if ab in self.POWERFUL_ABILITIES else 1.0 for ab in abilities]
+                ability_weights = []
+                for ab in abilities:
+                    static_w = 2.0 if ab in self.POWERFUL_ABILITIES else 1.0
+                    dynamic_w = dyn_data.get("abilities", {}).get(ab, 1.0)
+                    ability_weights.append(static_w * dynamic_w)
                 ability = random.choices(abilities, weights=ability_weights, k=1)[0]
             else:
                 ability = "とくせいなし"
 
-            # 努力値配分 (50%極振り / 50%完全ランダム)
+            # 努力値配分
             if random.random() < 0.5:
                 effort = [0] * 6
                 all_indices = [0, 1, 2, 3, 4, 5]
@@ -333,28 +336,25 @@ class AegisTeamBuilder:
                     idx = random.choice(valid_indices)
                     effort[idx] += 4
 
-            # ユーザー要求: 技構成の強さ重み付きランダム配分
+            # 技構成の選定
             learnable = self.learnsets.get(name, ["テラバースト"])
-
-            # 各技の強さ(威力、先制、強力補助)をスコアリングして重み付け
             move_weights = []
             for move_name in learnable:
                 move_data = Pokemon.all_moves.get(move_name)
-                weight = 1.0  # デフォルト
+                static_w = 1.0
                 if move_data:
                     power = move_data.get("power", 0)
                     priority = move_data.get("priority", 0)
                     move_class = move_data.get("class", "phy")
 
-                    # 威力80以上の攻撃技、または先制技、または主要な補助技は重み 3.0
                     if power >= 80 or priority > 0 or move_name in self.POWERFUL_MOVES_KEYWORDS:
-                        weight = 3.0
-                    # 使用されないゴミ変化技は重みを極小 0.1 にして徹底排除
+                        static_w = 3.0
                     elif move_class == "sta" and move_name not in self.POWERFUL_MOVES_KEYWORDS:
-                        weight = 0.1
-                move_weights.append(weight)
+                        static_w = 0.1
 
-            # 重複なしでの重み付きサンプリング (Pure Python 高速版)
+                dynamic_w = dyn_data.get("moves", {}).get(move_name, 1.0)
+                move_weights.append(static_w * dynamic_w)
+
             chosen_moves = []
             temp_pool = list(learnable)
             temp_weights = list(move_weights)
@@ -381,10 +381,6 @@ class AegisTeamBuilder:
                 "indiv": [31, 31, 31, 31, 31, 31],
                 "effort": effort
             }
-
-        os.makedirs("log", exist_ok=True)
-        with open("log/party.log", "w", encoding="utf-8") as fout:
-            json.dump(generated_party, fout, ensure_ascii=False, indent=2)
 
         return generated_party
 
@@ -479,7 +475,7 @@ class AegisTeamSelector:
             eff = 1.0
             for my_type in my_types:
                 atk_id = Pokemon.type_id.get(move_type, 0)
-                def_id = Pokemon.type_id.get(my_type, 0)
+                def_id = Pokemon.type_id.get(opp_type, 0)
                 eff *= Pokemon.type_corrections[atk_id][def_id]
 
             if move_type == "じめん" and ("ひこう" in my_types or my_poke.ability == "ふゆう"):
