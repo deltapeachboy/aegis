@@ -97,7 +97,7 @@ Battle.can_terastal = lambda self, player: False
 
 
 # =========================================================================
-# 3. 【高度化】AegisTeamBuilder (対面・受け数理モデル搭載版) [2]
+# 3. 【高度化】AegisTeamBuilder (対面・受け数理モデル搭載版)
 # =========================================================================
 class AegisTeamBuilder:
     """
@@ -131,7 +131,7 @@ class AegisTeamBuilder:
         "さらさらいわ": 0.1,
         "しめったいわ": 0.1,
         "つめたいいわ": 0.1,
-        "いのちのたま": 1.5,
+        "いのちのたま": 2.0,  # 2.0 に修正しました
         "きれいなぬけがら": 0.15,
         "くろいてっきゅう": 0.1,
         "たつじんのおび": 1.5,
@@ -193,6 +193,9 @@ class AegisTeamBuilder:
         "しろいハーブ": 0.75,
         "メンタルハーブ": 0.5,
         "ようせいのハネ": 1.0,
+        "こだわりハチマキ": 2.5,  # 修正しました
+        "こだわりメガネ": 2.5,  # 修正しました
+        "とつげきチョッキ": 2.5,  # 修正しました
     }
 
     # 壁貼りサポート型として代表的な「ひかりのねんど」推奨ポケモン
@@ -200,12 +203,19 @@ class AegisTeamBuilder:
         "オーロンゲ", "ジャローダ", "アローラキュウコン"
     }
 
+    # 強力な特性：サンプリング時の基本評価を 2.0 倍にし、出現率を優先する
     POWERFUL_ABILITIES = {
+        "マルチスケイル", "ちからもち", "いたずらごころ",
+        "ひでり", "あめふらし", "すなおこし",
+        "ゆきふらし", "テクニシャン", "かそく"
     }
 
+    # 性格の調整：両刀アタッカーや最遅トリックルーム用の性格を開放
     NATURE_WEIGHTS = {
-        "いじっぱり": 0.125, "ひかえめ": 0.125, "ようき": 0.125, "おくびょう": 0.125,
-        "わんぱく": 0.125, "しんちょう": 0.125, "ずぶとい": 0.125, "おだやか": 0.125
+        "いじっぱり": 0.1, "ひかえめ": 0.1, "ようき": 0.1, "おくびょう": 0.1,
+        "わんぱく": 0.1, "しんちょう": 0.1, "ずぶとい": 0.1, "おだやか": 0.1,
+        "ゆうかん": 0.05, "れいせい": 0.05, "さみしがり": 0.05, "おっとり": 0.05,
+        "やんちゃ": 0.05, "うっかりや": 0.05
     }
 
     POWERFUL_MOVES_KEYWORDS = {
@@ -393,140 +403,163 @@ class AegisTeamBuilder:
             if best_candidate:
                 team_members.append(best_candidate)
 
-        # 2. 重み付きアイテム配分 (Item Clause)
-        assigned_items = {}
+        # 🌟 1.2倍補正アイテムと、それが強化するタイプのマッピング定義
+        TYPE_BOOSTING_ITEMS = {
+            "メタルコート": "はがね",
+            "きせきのタネ": "くさ",
+            "もくたん": "ほのお",
+            "しんぴのしずく": "みず",
+            "シルクのスカーフ": "ノーマル",
+            "するどいくちばし": "ひこう",
+            "ぎんのこな": "むし",
+            "じしゃく": "でんき",
+            "かたいいし": "いわ",
+            "のろいのおふだ": "ゴースト",
+            "りゅうのキバ": "ドラゴン",
+            "どくばり": "どく",
+            "やわらかいすな": "じめん",
+            "くろいメガネ": "あく",
+            "くろおび": "かくとう",
+            "とけないこおり": "こおり",
+            "まがったスプーン": "エスパー",
+            "ようせいのハネ": "フェアリー"
+        }
+
+        def get_true_move_type(move_name: str, ab: str, t_type: str) -> str:
+            """技の対戦中における『実質的な攻撃タイプ』を特性・仕様から動的に解決する"""
+            mv_data = Pokemon.all_moves.get(move_name, {})
+            base_type = mv_data.get("type", "ノーマル")
+
+            if move_name == "ウェザーボール":
+                if ab == "あめふらし":
+                    return "みず"
+                elif ab == "ひでり":
+                    return "ほのお"
+                elif ab == "すなおこし":
+                    return "いわ"
+                elif ab == "ゆきふらし":
+                    return "こおり"
+            elif move_name == "テラバースト":
+                return t_type
+            return base_type
+
+        # 🌟 2 & 3. 技・能力・および持ち物の完全統合サンプリング（Item Clause 同期対応版）
+        generated_party = {}
+        assigned_items = {}  # 決定されたアイテムの重複排除用
         mega_stones_in_pool = {item for item in self.mb_items if "ナイト" in item}
         normal_items_pool = list(self.mb_items - mega_stones_in_pool)
 
-        for member in team_members:
-            # 図鑑データの特性スキャン
-            zukan_entry = Pokemon.zukan.get(member, {})
-            abilities = zukan_entry.get("ability", [])
-
-            mega_stone_name = member.split("(")[0] + "ナイト"
-
-            if mega_stone_name in self.mb_items:
-                # メガシンカ確率の動的決定 (ユーザーのカスタム重みを適用) [2]
-                mega_prob = self.MEGA_PROBABILITIES.get(member, 0.50)
-                if random.random() < mega_prob:
-                    assigned_items[member] = mega_stone_name
-                    continue
-
-            # 通常持ち物の重複排除重み付き選定
-            available_items = [item for item in normal_items_pool if item not in assigned_items.values()]
-            if available_items:
-                # ポケモンごとにローカルのアイテム重みテーブルをコピーして動的補正
-                local_item_tiers = dict(self.ITEM_TIERS)
-
-                # 🌟 要望: 天候発動特性を検知した場合、対応する「いわ（岩）」の重みを動的ブースト [2]
-                if "ひでり" in abilities:
-                    local_item_tiers["あついいわ"] = 5.0
-                if "あめふらし" in abilities:
-                    local_item_tiers["しめったいわ"] = 5.0
-                if "すなおこし" in abilities:
-                    local_item_tiers["さらさらいわ"] = 5.0
-                if "ゆきふらし" in abilities:
-                    local_item_tiers["つめたいいわ"] = 5.0
-
-                # 🌟 要望: 主要な壁貼り要員を検知した場合、「ひかりのねんど」の重みを動的ブースト [2]
-                base_member_name = member.split("(")[0]
-                if base_member_name in self.WALL_SETTER_POKEMON:
-                    local_item_tiers["ひかりのねんど"] = 5.0
-
-                item_weights = [local_item_tiers.get(itm, 0.1) for itm in available_items]
-                chosen_item = random.choices(available_items, weights=item_weights, k=1)[0]
-                assigned_items[member] = chosen_item
-            else:
-                assigned_items[member] = ""
-
-        # 3. 特性・性格・努力値・技構成の動的重み付き組み立て
-        generated_party = {}
         for i, name in enumerate(team_members):
             zukan_entry = Pokemon.zukan[name]
-
             dyn_data = pokemon_weights.get(name, {}) if pokemon_weights else {}
 
-            # 性格の選定
+            # A. 性格選定
             natures = list(self.NATURE_WEIGHTS.keys())
-            nature_weights = []
-            for nat in natures:
-                static_w = self.NATURE_WEIGHTS[nat]
-                dynamic_w = dyn_data.get("natures", {}).get(nat, 1.0)
-                nature_weights.append(static_w * dynamic_w)
+            nature_weights = [self.NATURE_WEIGHTS[nat] * dyn_data.get("natures", {}).get(nat, 1.0) for nat in natures]
             nature = random.choices(natures, weights=nature_weights, k=1)[0]
 
-            # 特性の選定
+            # B. 特性選定
             abilities = zukan_entry.get("ability", ["とくせいなし"])
             if abilities:
-                ability_weights = []
-                for ab in abilities:
-                    static_w = 2.0 if ab in self.POWERFUL_ABILITIES else 1.0
-                    dynamic_w = dyn_data.get("abilities", {}).get(ab, 1.0)
-                    ability_weights.append(static_w * dynamic_w)
+                ability_weights = [
+                    (2.0 if ab in self.POWERFUL_ABILITIES else 1.0) * dyn_data.get("abilities", {}).get(ab, 1.0)
+                    for ab in abilities
+                ]
                 ability = random.choices(abilities, weights=ability_weights, k=1)[0]
             else:
                 ability = "とくせいなし"
 
-            # 努力値配分
+            # C. 努力値配分
+            effort = [0] * 6
             if random.random() < 0.5:
-                effort = [0] * 6
                 all_indices = [0, 1, 2, 3, 4, 5]
                 max_two = random.sample(all_indices, 2)
-                for idx in max_two:
-                    effort[idx] = 252
+                for idx in max_two: effort[idx] = 252
                 remaining = [idx for idx in all_indices if idx not in max_two]
-                last_four = random.choice(remaining)
-                effort[last_four] = 4
+                effort[random.choice(remaining)] = 4
             else:
-                effort = [0] * 6
                 total_units = 127
                 for _ in range(total_units):
                     valid_indices = [idx for idx in range(6) if effort[idx] < 252]
-                    if not valid_indices:
-                        break
-                    idx = random.choice(valid_indices)
-                    effort[idx] += 4
+                    if not valid_indices: break
+                    effort[random.choice(valid_indices)] += 4
 
-            # 技構成の選定
+            # D. 技構成選定 (一律フラット等倍スタート、勝率連動重み dynamic_w のみに委ねる)
             learnable = self.learnsets.get(name, ["テラバースト"])
-            move_weights = []
-            for move_name in learnable:
-                move_data = Pokemon.all_moves.get(move_name)
-                static_w = 1.0
-                if move_data:
-                    power = move_data.get("power", 0)
-                    priority = move_data.get("priority", 0)
-                    move_class = move_data.get("class", "phy")
-
-                    if power >= 80 or priority > 0 or move_name in self.POWERFUL_MOVES_KEYWORDS:
-                        static_w = 3.0
-                    elif move_class == "sta" and move_name not in self.POWERFUL_MOVES_KEYWORDS:
-                        static_w = 0.1
-
-                dynamic_w = dyn_data.get("moves", {}).get(move_name, 1.0)
-                move_weights.append(static_w * dynamic_w)
+            move_weights = [dyn_data.get("moves", {}).get(m, 1.0) for m in learnable]
 
             chosen_moves = []
             temp_pool = list(learnable)
             temp_weights = list(move_weights)
             num_to_select = min(4, len(temp_pool))
-
             for _ in range(num_to_select):
                 if sum(temp_weights) <= 0:
                     temp_weights = [1.0] * len(temp_pool)
                 chosen = random.choices(temp_pool, weights=temp_weights, k=1)[0]
                 chosen_moves.append(chosen)
+
+                # 選ばれた技をプールから除外し、重複を防ぐ
                 idx = temp_pool.index(chosen)
                 temp_pool.pop(idx)
                 temp_weights.pop(idx)
 
+            # E. 持ち物サンプリング (技タイプへの「1.2倍アイテム動的適合性テスト」付き)
+            assigned_item = ""
+            mega_stone_name = name.split("(")[0] + "ナイト"
+
+            if mega_stone_name in self.mb_items and random.random() < self.MEGA_PROBABILITIES.get(name, 0.50):
+                # メガストーンが解禁されており、かつ確率をパスした場合は持たせる
+                assigned_item = mega_stone_name
+            else:
+                # 重複していない利用可能な持ち物プール
+                available_items = [itm for itm in normal_items_pool if itm not in assigned_items.values()]
+                if available_items:
+                    local_item_tiers = dict(self.ITEM_TIERS)
+
+                    # 天候岩および粘土の動的ブースト
+                    if "ひでり" in ability: local_item_tiers["あついいわ"] = 5.0
+                    if "あめふらし" in ability: local_item_tiers["しめったいわ"] = 5.0
+                    if "すなおこし" in ability: local_item_tiers["さらさらいわ"] = 5.0
+                    if "ゆきふらし" in ability: local_item_tiers["つめたいいわ"] = 5.0
+                    if name.split("(")[0] in self.WALL_SETTER_POKEMON:
+                        local_item_tiers["ひかりのねんど"] = 5.0
+
+                    # 🌟 自身の「物理・特殊の攻撃技」の実質的な打点タイプ一覧を割り出す
+                    pokemon_ttype = zukan_entry["type"][0]  # テラバースト判定用の元タイプ
+                    attack_types = set()
+                    for mv in chosen_moves:
+                        mv_data = Pokemon.all_moves.get(mv, {})
+                        # 変化（sta）技以外の攻撃技のみを抽出
+                        if mv_data and mv_data.get("class") != "sta":
+                            true_type = get_true_move_type(mv, ability, pokemon_ttype)
+                            attack_types.add(true_type)
+
+                    item_weights = []
+                    for itm in available_items:
+                        weight = local_item_tiers.get(itm, 0.1)
+                        # 🌟 1.2倍補正アイテムの場合、自身の持つ攻撃技のタイプと一致しなければ、出現重みを「0.0」にして完全に排除
+                        if itm in TYPE_BOOSTING_ITEMS:
+                            req_type = TYPE_BOOSTING_ITEMS[itm]
+                            if req_type not in attack_types:
+                                weight = 0.0  # 適合しない場合はサンプリング重みをゼロにする
+                        item_weights.append(weight)
+
+                    # すべてのアイテムの重みが 0 になった場合の安全用のフォールバック
+                    if sum(item_weights) <= 0:
+                        item_weights = [1.0] * len(available_items)
+
+                    assigned_item = random.choices(available_items, weights=item_weights, k=1)[0]
+
+            assigned_items[name] = assigned_item
+
+            # 最終的な個体情報の決定
             generated_party[str(i)] = {
                 "name": name,
                 "sex": 1 if i % 2 == 0 else -1,
                 "level": 50,
                 "nature": nature,
                 "ability": ability,
-                "item": assigned_items.get(name, ""),
+                "item": assigned_item,
                 "Ttype": zukan_entry["type"][0],
                 "moves": chosen_moves,
                 "indiv": [31, 31, 31, 31, 31, 31],

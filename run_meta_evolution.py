@@ -311,20 +311,9 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
         learnable = self.learnsets.get(name, ["テラバースト"])
         move_weights = []
         for move_name in learnable:
-            move_data = Pokemon.all_moves.get(move_name)
-            static_w = 1.0
-            if move_data:
-                power = move_data.get("power", 0)
-                priority = move_data.get("priority", 0)
-                move_class = move_data.get("class", "phy")
-
-                if power >= 80 or priority > 0 or move_name in self.POWERFUL_MOVES_KEYWORDS:
-                    static_w = 3.0
-                elif move_class == "sta" and move_name not in self.POWERFUL_MOVES_KEYWORDS:
-                    static_w = 0.1
-
+            # すべての技を一律フラットに扱い、純粋な勝率連動学習の重み（dynamic_w）のみでサンプリングする
             dynamic_w = dyn_data.get("moves", {}).get(move_name, 1.0)
-            move_weights.append(static_w * dynamic_w)
+            move_weights.append(dynamic_w)
 
         chosen_moves = []
         temp_pool = list(learnable)
@@ -755,11 +744,18 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
 
             print(f"   ┗ 検出された対策ポケモン（次世代出現重み1.5倍ブースト対象）:")
             for rank_idx, (counter_name, score) in enumerate(top_counters, 1):
-                # 出現重みを 1.5 倍にブースト (上限10.0を維持)
                 old_w = pokemon_weights[counter_name]["weight"]
-                pokemon_weights[counter_name]["weight"] = max(0.1, min(10.0, old_w * 1.5))
+
+                # ご提案に基づき、補正前重みが 4.0 以下の時だけ 1.5倍 ブーストを適用する
+                if old_w <= 4.0:
+                    pokemon_weights[counter_name]["weight"] = max(0.1, min(10.0, old_w * 1.5))
+                    boost_status = "➔ ブースト適用"
+                else:
+                    # 4.0 を超えている場合は、過剰なインフレを防ぐために現状維持とする
+                    boost_status = "➔ 現状維持（4.0超過による制限）"
+
                 print(
-                    f"     {rank_idx}位: 【{counter_name}】 (補正前重み: {old_w:.2f} ➔ 補正後重み: {pokemon_weights[counter_name]['weight']:.2f})")
+                    f"     {rank_idx}位: 【{counter_name}】 (補正前重み: {old_w:.2f} {boost_status} | 補正後重み: {pokemon_weights[counter_name]['weight']:.2f})")
 
         os.makedirs("log", exist_ok=True)
         with open(weights_path, "w", encoding="utf-8") as f_out:
