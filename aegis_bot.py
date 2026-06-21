@@ -13,12 +13,10 @@ import numpy as np
 import cv2
 import mss  # 高速画面キャプチャライブラリ
 import urllib.request  # SDK不要でGemini APIと直接通信
-import gensim
 
 # =========================================================================
 # 0. 外部高度推論ライブラリの安全ロード（Safe Fallback）
 # =========================================================================
-# A. PyTorch (BERT選出予測用)
 try:
     import torch
     import torch.nn as nn
@@ -26,18 +24,13 @@ except ImportError:
     torch = None
     nn = None
 
-# B. gensim (Word2Vec構築補完用)
 try:
     from gensim.models import Word2Vec
 except ImportError:
-    from gensim import models
-
-    # `from gensim.models import Word2Vec` がインポートできない場合はNoneフォールバック
     Word2Vec = None
 except Exception:
     Word2Vec = None
 
-# C. ダメージ計算API
 try:
     from src.damage_calculator_api.calculators.damage_calculator import calculate_damage
 except ImportError:
@@ -104,20 +97,74 @@ Battle.can_terastal = lambda self, player: False
 
 
 # =========================================================================
-# 3. 【高度化】AegisTeamBuilder (Word2Vec構築共起モデル統合)
+# 3. 【高度化】AegisTeamBuilder (重み付き型構築システム搭載) [2]
 # =========================================================================
 class AegisTeamBuilder:
     """
     Project Aegis 構築自動生成システム (Layer 15)
-    Word2Vec による人間強者の共起シナジー(組まれやすさ)をタイプ補完とブレンドして6体チームを決定する。
+    Word2Vecによるシナジーと、性格・努力値・持ち物・特性・技の「重み付き対戦特化サンプリング」を統合。
     """
+
+    # 1. メガシンカ確率の重み付け (通常が強すぎる枠は33%, メガ必須枠は66%)
+    MEGA_PROBABILITIES = {
+        "スピアー": 0.66, "クチート": 0.66, "ガルーラ": 0.66, "ボスゴドラ": 0.66,
+        "チャーレム": 0.66, "ヤミラミ": 0.66, "ライボルト": 0.66, "ジュペッタ": 0.66,
+        "アブソル": 0.66, "オニゴーリ": 0.66, "ピジョット": 0.66, "ヘルガー": 0.66,
+        "エルレイド": 0.66, "サメハダー": 0.66, "バクーダ": 0.66, "チルタリス": 0.66,
+        "ガブリアス": 0.33, "ボーマンダ": 0.33, "バンギラス": 0.33, "ギャラドス": 0.33,
+        "メタグロス": 0.33, "ゲンガー": 0.33, "ハッサム": 0.33, "カイリュー": 0.33,
+        "ヘラクロス": 0.33, "エアームド": 0.33, "シビルドン": 0.33, "シャンデラ": 0.33,
+        "ドリュウズ": 0.33, "ブリガロン": 0.33, "マフォクシー": 0.33, "カラマネロ": 0.33,
+        "ゲッコウガ": 0.33, "ドラミドロ": 0.33, "ルチャブル": 0.33, "タイレーツ": 0.33,
+        "スコヴィラン": 0.33, "キラフロル": 0.33
+    }
+
+    # 2. 強力な持ち物の傾斜重み (強い持ち物を高確率で優先配分)
+    ITEM_TIERS = {
+        # S Tier (重み 5.0)
+        "きあいのタスキ": 5.0, "こだわりハチマキ": 5.0, "こだわりメガネ": 5.0, "こだわりスカーフ": 5.0,
+        "とつげきチョッキ": 5.0, "いのちのたま": 5.0, "たべのこし": 5.0, "オボンのみ": 5.0, "ラムのみ": 5.0,
+        # A Tier (重み 2.0)
+        "ゴツゴツメット": 2.0, "あつぞこブーツ": 2.0, "しんかのきせき": 2.0, "おうじゃのしるし": 2.0,
+        "しろいハーブ": 2.0, "たつじんのおび": 2.0, "ピントレンズ": 2.0, "おおきなねっこ": 2.0,
+        "ヨプのみ": 2.0, "ヤチェのみ": 2.0, "シュカのみ": 2.0, "オッカのみ": 2.0, "ロゼルのみ": 2.0,
+        "リンドのみ": 2.0, "バコウのみ": 2.0, "ソクノのみ": 2.0, "ハバンのみ": 2.0, "ビアーのみ": 2.0,
+        "イトケのみ": 2.0, "ホズのみ": 2.0, "カシブのみ": 2.0, "ナモのみ": 2.0, "タンガのみ": 2.0,
+        # B Tier (重み 1.0)
+        "メタルコート": 1.0, "しんぴのしずく": 1.0, "やわらかいすな": 1.0, "きせきのタネ": 1.0,
+        "もくたん": 1.0, "じしゃく": 1.0, "とけないこおり": 1.0, "まがったスプーン": 1.0,
+        "かたいいし": 1.0, "のろいのおふだ": 1.0, "りゅうのキバ": 1.0, "くろおび": 1.0,
+        "どくばり": 1.0, "するどいくちばし": 1.0, "ようせいのハネ": 1.0, "きれいなぬけがら": 1.0,
+        "ヒメリのみ": 1.0, "クラボのみ": 1.0, "チーゴのみ": 1.0, "ナナシのみ": 1.0, "オレンのみ": 1.0,
+    }
+
+    # 3. 強特性の選定バイアス (強特性は66% / その他は33%の確率比で選択)
+    POWERFUL_ABILITIES = {
+        "てんねん", "へんげんじざい", "かそく", "いかく", "マルチスケイル", "いたずらごころ",
+        "ちからもち", "ポイズンヒール", "テクニシャン", "きれあじ", "おうごんのからだ",
+        "ちょすい", "ひでり", "あめふらし", "すいすい", "すなかき", "ゆきかき", "ようりょくそ",
+        "ダウンロード", "トレース", "バトルスイッチ", "おやこあい", "マジックミラー", "かげふみ"
+    }
+
+    # 4. 実戦性格の傾斜配分 (主要アタッカー性格に72%のウェイトを配分)
+    NATURE_WEIGHTS = {
+        "いじっぱり": 0.18, "ひかえめ": 0.18, "ようき": 0.18, "おくびょう": 0.18,
+        "わんぱく": 0.07, "しんちょう": 0.07, "ずぶとい": 0.07, "おだやか": 0.07
+    }
+
+    # 5. 強力な変化・サポート・展開技の定義 (技構成の重み付けに使用)
+    POWERFUL_MOVES_KEYWORDS = {
+        "ステルスロック", "あくび", "ちょうはつ", "おにび", "でんじは", "へびにらみ", "ねばねばネット",
+        "つるぎのまい", "りゅうのまい", "ちょうのまい", "めいそん", "てっぺき", "ビルドアップ",
+        "なまける", "じこさいせい", "はねやすめ", "こうごうせい", "ちからをすいとる",
+        "キングシールド", "トーチカ", "ニードルガード", "アンコール", "いたみわけ", "しっぽきり"
+    }
 
     def __init__(self, learnsets: Dict[str, List[str]], mb_pokemon: Set[str], mb_items: Set[str]):
         self.learnsets = learnsets
         self.mb_pokemon = mb_pokemon
         self.mb_items = mb_items
 
-        # Word2Vec共起モデルの安全ロード
         self.w2v_model = None
         w2v_path = "data/pokemon_word2vec.model"
         if Word2Vec and os.path.exists(w2v_path):
@@ -125,10 +172,9 @@ class AegisTeamBuilder:
                 self.w2v_model = Word2Vec.load(w2v_path)
                 print(f"ℹ️ [Aegis Builder] Word2Vec 構築共起モデル '{w2v_path}' をロードしました。")
             except Exception as e:
-                warnings.warn(f"Word2Vecモデルのロードに失敗しました(標準のタイプ補完にフォールバックします): {e}")
+                warnings.warn(f"Word2Vecモデルのロードに失敗しました: {e}")
 
     def get_w2v_synergy(self, member_name: str, candidate_name: str) -> float:
-        """Word2Vecベクトル空間上でのポケモン2体の共起度(組まれやすさ)を[0.0 ~ 1.0]で算出"""
         if self.w2v_model is None:
             return 0.0
         try:
@@ -161,7 +207,6 @@ class AegisTeamBuilder:
         return resistances
 
     def build_team(self, core_name: str) -> Dict[str, Any]:
-        """軸(コア)に基づき、タイプ補完とWord2Vec共起シナジーをブレンドして6体構築を自動決定"""
         if core_name == "ギルガルド" and "ギルガルド" not in Pokemon.zukan:
             for k in ['ギルガルド(シールド)', 'ギルガルド（シールド）']:
                 if k in Pokemon.zukan:
@@ -178,6 +223,7 @@ class AegisTeamBuilder:
 
         team_members = [core_name]
 
+        # 1. 軸に基づいたメンバー5体の決定 (補完 ＆ 共起シナジー)
         while len(team_members) < 6:
             current_weaknesses = []
             for member in team_members:
@@ -204,19 +250,15 @@ class AegisTeamBuilder:
                        team_members):
                     continue
 
-                # A. タイプ補完スコア（耐性による弱点カバー）
                 cand_res = self.calculate_resistances(Pokemon.zukan[candidate]["type"])
                 type_score = sum(2.0 if w in cand_res else 0.0 for w in current_weaknesses)
                 type_score += sum(Pokemon.zukan[candidate]["base"]) * 0.001
 
-                # B. 【新規接続】Word2Vecによる人間強者構築の共起(組まれやすさ)スコア
                 w2v_score = 0.0
                 if self.w2v_model:
-                    # 既に選ばれたチームメンバー全員との平均共起度を算出
                     synergies = [self.get_w2v_synergy(m, candidate) for m in team_members]
                     w2v_score = sum(synergies) / len(team_members) if synergies else 0.0
 
-                # 補完と共起をブレンド（重み比重 5.0 倍で調整）
                 total_score = type_score + (w2v_score * 5.0)
 
                 if total_score > max_total_score:
@@ -226,35 +268,52 @@ class AegisTeamBuilder:
             if best_candidate:
                 team_members.append(best_candidate)
 
+        # 2. 重み付きアイテム決定ロジック [2]
         assigned_items = {}
         mega_stones_in_pool = {item for item in self.mb_items if "ナイト" in item}
         normal_items_pool = list(self.mb_items - mega_stones_in_pool)
 
-        random.shuffle(normal_items_pool)
-        normal_item_idx = 0
-
+        # メンバーごとにメガシンカ可能なら「設定された確率重み」でストーンを割り当て
         for member in team_members:
             mega_stone_name = member.split("(")[0] + "ナイト"
 
-            if mega_stone_name in self.mb_items and random.random() < 0.5:
-                assigned_items[member] = mega_stone_name
-            else:
-                while normal_item_idx < len(normal_items_pool):
-                    cand_item = normal_items_pool[normal_item_idx]
-                    normal_item_idx += 1
-                    if cand_item not in assigned_items.values():
-                        assigned_items[member] = cand_item
-                        break
-                else:
-                    assigned_items[member] = ""
+            if mega_stone_name in self.mb_items:
+                # ユーザー要求: メガシンカ確率を33%～66%の確率重みに動的設定 [2]
+                mega_prob = self.MEGA_PROBABILITIES.get(member, 0.50)
 
+                if random.random() < mega_prob:
+                    assigned_items[member] = mega_stone_name
+                    continue
+
+            # メガに選ばれなかった場合、通常の持ち物から重複なしで重み付き選定
+            available_items = [item for item in normal_items_pool if item not in assigned_items.values()]
+            if available_items:
+                # ユーザー要求: 持ち物の強さに合わせて重み(確率)付きサンプリング [2]
+                item_weights = [self.ITEM_TIERS.get(itm, 0.1) for itm in available_items]
+                chosen_item = random.choices(available_items, weights=item_weights, k=1)[0]
+                assigned_items[member] = chosen_item
+            else:
+                assigned_items[member] = ""
+
+        # 3. 特性・性格・努力値・技構成の重み付き組み立て [2]
         generated_party = {}
         for i, name in enumerate(team_members):
             zukan_entry = Pokemon.zukan[name]
 
-            nature = random.choice(
-                ["いじっぱり", "ひかえめ", "ようき", "おくびょう", "わんぱく", "しんちょう", "おだやか", "ずぶとい"])
+            # ユーザー要求: 性格の実戦重み付きランダム配分
+            natures = list(self.NATURE_WEIGHTS.keys())
+            nature_w = list(self.NATURE_WEIGHTS.values())
+            nature = random.choices(natures, weights=nature_w, k=1)[0]
 
+            # ユーザー要求: 特性の強さに応じた重み付き選定 (強特性=2.0、その他=1.0)
+            abilities = zukan_entry.get("ability", ["とくせいなし"])
+            if abilities:
+                ability_weights = [2.0 if ab in self.POWERFUL_ABILITIES else 1.0 for ab in abilities]
+                ability = random.choices(abilities, weights=ability_weights, k=1)[0]
+            else:
+                ability = "とくせいなし"
+
+            # 努力値配分 (50%極振り / 50%完全ランダム)
             if random.random() < 0.5:
                 effort = [0] * 6
                 all_indices = [0, 1, 2, 3, 4, 5]
@@ -274,11 +333,41 @@ class AegisTeamBuilder:
                     idx = random.choice(valid_indices)
                     effort[idx] += 4
 
+            # ユーザー要求: 技構成の強さ重み付きランダム配分
             learnable = self.learnsets.get(name, ["テラバースト"])
-            moves = random.sample(learnable, min(4, len(learnable)))
 
-            abilities = zukan_entry.get("ability", ["とくせいなし"])
-            ability = random.choice(abilities) if abilities else "とくせいなし"
+            # 各技の強さ(威力、先制、強力補助)をスコアリングして重み付け
+            move_weights = []
+            for move_name in learnable:
+                move_data = Pokemon.all_moves.get(move_name)
+                weight = 1.0  # デフォルト
+                if move_data:
+                    power = move_data.get("power", 0)
+                    priority = move_data.get("priority", 0)
+                    move_class = move_data.get("class", "phy")
+
+                    # 威力80以上の攻撃技、または先制技、または主要な補助技は重み 3.0
+                    if power >= 80 or priority > 0 or move_name in self.POWERFUL_MOVES_KEYWORDS:
+                        weight = 3.0
+                    # 使用されないゴミ変化技は重みを極小 0.1 にして徹底排除
+                    elif move_class == "sta" and move_name not in self.POWERFUL_MOVES_KEYWORDS:
+                        weight = 0.1
+                move_weights.append(weight)
+
+            # 重複なしでの重み付きサンプリング (Pure Python 高速版)
+            chosen_moves = []
+            temp_pool = list(learnable)
+            temp_weights = list(move_weights)
+            num_to_select = min(4, len(temp_pool))
+
+            for _ in range(num_to_select):
+                if sum(temp_weights) <= 0:
+                    temp_weights = [1.0] * len(temp_pool)
+                chosen = random.choices(temp_pool, weights=temp_weights, k=1)[0]
+                chosen_moves.append(chosen)
+                idx = temp_pool.index(chosen)
+                temp_pool.pop(idx)
+                temp_weights.pop(idx)
 
             generated_party[str(i)] = {
                 "name": name,
@@ -288,7 +377,7 @@ class AegisTeamBuilder:
                 "ability": ability,
                 "item": assigned_items.get(name, ""),
                 "Ttype": zukan_entry["type"][0],
-                "moves": moves,
+                "moves": chosen_moves,
                 "indiv": [31, 31, 31, 31, 31, 31],
                 "effort": effort
             }
@@ -311,7 +400,6 @@ class AegisTeamSelector:
     def __init__(self, learnsets: Dict[str, List[str]]):
         self.learnsets = learnsets
 
-        # BERT選出予測モデルの安全な動的ロード
         self.bert_model = None
         bert_path = "src/selection_bert/selection_bert.pth"
 
@@ -319,7 +407,6 @@ class AegisTeamSelector:
             try:
                 import importlib
 
-                # 1. 自身の物理位置から 'src' ディレクトリをパスに安全に追加
                 base_dir = os.path.dirname(os.path.abspath(__file__))
                 src_dir = os.path.join(base_dir, "src")
                 if src_dir not in sys.path:
@@ -327,27 +414,18 @@ class AegisTeamSelector:
                 if base_dir not in sys.path:
                     sys.path.append(base_dir)
 
-                # 2. 静的解析警告を回避するために動的にインポートを実行
                 model_module = importlib.import_module("selection_bert.model")
-
-                # 3. model.py 内から PyTorchモデル(nn.Moduleを継承したクラス)を自動検出する
                 target_class = None
 
-                # 第一候補: SelectionBERT クラス
                 if hasattr(model_module, "SelectionBERT"):
                     target_class = getattr(model_module, "SelectionBERT")
                 else:
-                    # 予備: 定義されているクラス群からnn.Moduleのサブクラスを探索
                     for attr_name in dir(model_module):
                         attr = getattr(model_module, attr_name)
                         if isinstance(attr, type) and nn and issubclass(attr, nn.Module) and attr.__name__ != "Module":
                             target_class = attr
                             break
 
-                if target_score_class := target_class if 'target_class' in locals() else None:  # 安全策
-                    pass
-
-                # 見つかったクラスをインスタンス化
                 if target_class is not None:
                     self.bert_model = target_class()
                     self.bert_model.load_state_dict(torch.load(bert_path, map_location="cpu"))
@@ -414,26 +492,20 @@ class AegisTeamSelector:
         return score
 
     def get_bert_prob_score(self, combo: Tuple[int, ...], my_team: List[Pokemon], opp_team: List[Pokemon]) -> float:
-        """BERT選出モデルをロードして、指定された選出パターンの期待選出確率を出力"""
         if self.bert_model is None or torch is None:
             return 0.0
         try:
-            # 簡略化した特徴量表現化（詳細なエンコーダーがあればそれを使用）
-            # ここではお互いのチームのポケモンの図鑑IDを入力とする
             my_ids = torch.tensor([[Pokemon.zukan_name.get(p.name, [0])[0] for p in my_team]], dtype=torch.long)
             opp_ids = torch.tensor([[Pokemon.zukan_name.get(p.name, [0])[0] for p in opp_team]], dtype=torch.long)
 
             with torch.no_grad():
-                # 3体の期待確率（出力テンソル）
                 probs = self.bert_model(my_ids, opp_ids)
-                # 指定したインデックスの期待値合計を返す
                 score = float(sum(probs[0][idx].item() for idx in combo))
                 return score
         except Exception:
             return 0.0
 
     def select(self, my_team: List[Pokemon], opp_team: List[Pokemon], num_select: int = 3) -> List[int]:
-        """タイプ相性とBERT選出期待度を融合して、最適な選出インデックスのリストを返す"""
         if len(my_team) <= num_select:
             return list(range(len(my_team)))
 
@@ -444,7 +516,6 @@ class AegisTeamSelector:
         max_total_score = -999.0
 
         for combo in all_combinations:
-            # A. 相性総当たりスコア
             combo_score = 0.0
             for my_idx in combo:
                 my_poke = my_team[my_idx]
@@ -453,10 +524,7 @@ class AegisTeamSelector:
                     poke_score += self.evaluate_matchup(my_poke, opp_poke)
                 combo_score += poke_score
 
-            # B. BERT選出予測モデルによる確率スコア（利用可能な場合）
             bert_score = self.get_bert_prob_score(combo, my_team, opp_team)
-
-            # 相性と予測確率をブレンド（重み比重 10.0 でブレンド）
             total_score = combo_score + (bert_score * 10.0)
 
             if total_score > max_total_score:
@@ -486,8 +554,6 @@ class AegisTeamSelector:
 class AegisAnalyzer(Pokebot):
     """
     Project Aegis 戦略解析・配信観測AI（アナライザー）
-    画面OCRからのベイズ更新に加え、被ダメージ・行動順（すばやさ実数）による
-    多次元的なベイズ逆算看破エンジンを搭載。
     """
 
     def __init__(self, capture_box: Optional[Dict[str, int]] = None):
@@ -711,11 +777,6 @@ class AegisAnalyzer(Pokebot):
         return None
 
     def update_beliefs_by_implicit_observations(self) -> None:
-        """
-        【新規：多次元ベイズ更新】
-        対戦中に発生した非明示的なイベント（行動順、被ダメージ量）から
-        相手の素早さ(S)実数値、耐久努力値(H-B-D)、および突撃チョッキなどの所持仮説を逆算する。
-        """
         if self.belief_state is None or self.pokemon[0] is None or self.pokemon[1] is None:
             return
 
@@ -723,58 +784,45 @@ class AegisAnalyzer(Pokebot):
         if active_enemy not in self.belief_state.beliefs:
             return
 
-        # 1. 技の行動順（すばやさ S の逆算）
-        # 同一優先度のコマンドを選択したのに自分が先攻（または後攻）だった場合、S実数値の確率を更新
         if hasattr(self, 'speed_order') and self.speed_order:
-            # 簡略化：前ターンお互いが攻撃コマンドを選択していた場合
             if self.turn > 1 and len(self.speed_order) >= 2:
                 fast_player = self.speed_order[0]
                 slow_player = self.speed_order[1]
 
-                my_s = self.pokemon[0].status[5]  # 自分の現在のS実数値
+                my_s = self.pokemon[0].status[5]
 
-                # 自分が先攻（相手が後攻）
                 if fast_player == 0 and slow_player == 1:
                     for hyp in list(self.belief_state.beliefs[active_enemy].keys()):
-                        hyp_s = hyp.get_stats()[5]  # 相手の仮説S実数値
+                        hyp_s = hyp.get_stats()[5]
                         if hyp_s >= my_s:
-                            # 相手の方がSが速いという仮説の確率を大幅に減衰
                             self.belief_state.beliefs[active_enemy][hyp] *= 0.1
 
-                # 自分が後攻（相手が先攻）
                 elif fast_player == 1 and slow_player == 0:
                     for hyp in list(self.belief_state.beliefs[active_enemy].keys()):
                         hyp_s = hyp.get_stats()[5]
                         if hyp_s <= my_s:
-                            # 相手の方がSが遅いという仮説の確率を大幅に減衰
                             self.belief_state.beliefs[active_enemy][hyp] *= 0.1
 
-        # 2. ダメージ量による耐久型・チョッキの逆算
-        # 前のターンに自分が与えたダメージイベントを検出して逆引き計算
         if calculate_damage and self.process_buffer:
-            last_events = self.process_buffer[-5:]  # 直近数件のイベント
+            last_events = self.process_buffer[-5:]
             dmg_events = [e for e in last_events if e.get("type") == "damage" and e.get("player") == 1]
 
             for event in dmg_events:
-                dmg_percent = event.get("damage_percent")  # HPの減少比率
+                dmg_percent = event.get("damage_percent")
                 move_used = event.get("move")
 
                 if dmg_percent and move_used:
                     for hyp in list(self.belief_state.beliefs[active_enemy].keys()):
-                        # 相手の仮説ステータスに基づいて、ダメージ計算を逆シミュレート
                         min_dmg, max_dmg = calculate_damage(
                             attacker=self.pokemon[0],
-                            defender_hyp=hyp,  # 相手の仮説
+                            defender_hyp=hyp,
                             move_name=move_used
                         )
-                        # 実ダメージが計算値の乱数幅（チョッキ補正など含む）に収まっているか
                         if min_dmg <= dmg_percent <= max_dmg:
                             self.belief_state.beliefs[active_enemy][hyp] *= 1.5
                         else:
                             self.belief_state.beliefs[active_enemy][hyp] *= 0.2
 
-        # 3. 確率の再正規化
-        # BeliefState 側の正規化メソッドを呼び出すか、手動で処理
         total = sum(self.belief_state.beliefs[active_enemy].values())
         if total > 0:
             for hyp in self.belief_state.beliefs[active_enemy]:
@@ -787,7 +835,6 @@ class AegisAnalyzer(Pokebot):
             else:
                 return
 
-        # OCRバッファ（明示的観測）からの更新
         current_buffer_len = len(self.process_buffer)
         if current_buffer_len > self.last_processed_buffer_len:
             new_events = self.process_buffer[self.last_processed_buffer_len:]
@@ -799,7 +846,6 @@ class AegisAnalyzer(Pokebot):
 
             self.last_processed_buffer_len = current_buffer_len
 
-        # 行動順・ダメージ量（非明示的観測）からの更新を連動
         self.update_beliefs_by_implicit_observations()
 
     def clone(self, player: int = None) -> Battle:
