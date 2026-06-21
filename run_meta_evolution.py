@@ -11,8 +11,6 @@ from collections import Counter
 
 # =========================================================================
 # 0. 【File Path Redirect & Aegislash Data Patch】
-# どこから実行されても、自身の物理位置から 'battle_data/mb_learnset.json' を
-# 逆算し、強制リダイレクトとギルガルドの技同期を行うパッチ
 # =========================================================================
 _original_open = builtins.open
 
@@ -37,7 +35,6 @@ builtins.open = patched_open
 
 # =========================================================================
 # 1. 【Aegis Namespace Bridge】
-# 古いパッケージ名空間へのインポート要求を pokepy モジュールへリダイレクト
 # =========================================================================
 sys.modules['src.pokemon_battle_sim'] = types.ModuleType('src.pokemon_battle_sim')
 sys.modules['src.pokemon_battle_sim.pokemon'] = types.ModuleType('src.pokemon_battle_sim.pokemon')
@@ -74,22 +71,18 @@ def generate_evolved_team(builder: AegisTeamBuilder, weights: dict[str, float]) 
     """環境の勝率（重み）に基づき、優秀な個体を引き当てて6体構築を生成する"""
     candidates = list(builder.mb_pokemon)
 
-    # 重みリストの作成（未登録のものはデフォルト値 1.0）
     prob_weights = [weights.get(name, 1.0) for name in candidates]
     if sum(prob_weights) == 0:
         prob_weights = [1.0] * len(candidates)
 
-    # 重み付きランダムサンプリングで軸を決定
     random_core = random.choices(candidates, weights=prob_weights, k=1)[0]
     team_dict = builder.build_team(random_core)
 
-    # シミュレータオブジェクトへの復元とデータ型安全変換
     selected_team = []
     for s in team_dict:
         p = Pokemon()
         name = team_dict[s]['name']
 
-        # ギルガルド図鑑の自動補正
         if name == "ギルガルド" and "ギルガルド" not in Pokemon.zukan:
             for k in ['ギルガルド(シールド)', 'ギルガルド（シールド）']:
                 if k in Pokemon.zukan:
@@ -107,12 +100,10 @@ def generate_evolved_team(builder: AegisTeamBuilder, weights: dict[str, float]) 
         p.moves = team_dict[s]['moves']
 
         ind_data = team_dict[s].get('indiv', [31] * 6)
-        p.indiv = [ind_data.get(k, 31) for k in ["H", "A", "B", "C", "D", "S"]] if isinstance(ind_data,
-                                                                                              dict) else ind_data
+        p.indiv = [ind_data.get(k, 31) for k in ["H", "A", "B", "C", "D", "S"]] if isinstance(ind_data, dict) else ind_data
 
         eff_data = team_dict[s].get('effort', [0] * 6)
-        p.effort = [eff_data.get(k, 0) for k in ["H", "A", "B", "C", "D", "S"]] if isinstance(eff_data,
-                                                                                              dict) else eff_data
+        p.effort = [eff_data.get(k, 0) for k in ["H", "A", "B", "C", "D", "S"]] if isinstance(eff_data, dict) else eff_data
 
         p.update_status()
         selected_team.append(p)
@@ -145,7 +136,6 @@ def analyze_generation_meta(log_path: str) -> dict:
                 selections = match["selections"][pl]
                 team = match["teams"][pl]
 
-                # 選出された3体のログ情報をカウント
                 for idx in selections:
                     poke = team[idx]
                     name = poke["name"]
@@ -193,21 +183,18 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
     match_seed = int(time.time() * 1000) % 1000000
     battle = Battle(seed=match_seed)
 
-    # 重み付き構築の生成
     team_p0 = generate_evolved_team(builder, weights)
     team_p1 = generate_evolved_team(builder, weights)
 
     battle.selected[0] = team_p0
     battle.selected[1] = team_p1
 
-    # 3体選出フェーズ
     sel_p0 = selector.select(team_p0, team_p1, num_select=3)
     sel_p1 = selector.select(team_p1, team_p0, num_select=3)
 
     battle.selected[0] = [deepcopy(team_p0[i]) for i in sel_p0]
     battle.selected[1] = [deepcopy(team_p1[i]) for i in sel_p1]
 
-    # 不完全情報用の信念状態を初期化
     beliefs = [
         PokemonBeliefState.__new__(PokemonBeliefState),
         PokemonBeliefState.__new__(PokemonBeliefState)
@@ -227,14 +214,12 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
         for name in opp_names:
             beliefs[pl].beliefs[name] = analyzer._build_flat_belief(name)
 
-    # 0ターン目の繰り出し
     battle.turn = 0
     for player in range(2):
         battle.change_pokemon(player, idx=0, landing=False)
     for player in battle.speed_order:
         battle.land(player)
 
-    # ターン解決ループ
     history_log = []
     while battle.winner() is None:
         battle.turn += 1
@@ -284,7 +269,6 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
     """世代交代の強化学習、メタ変遷の統計処理、およびTop 3の構築抽出・保存を実行する"""
     Pokemon.init(season=22)
 
-    # キングシールド表記揺れの同期
     for target_alias in ['キングズシールド', 'キング・シールド', 'キングズ・シールド']:
         if target_alias in Pokemon.all_moves:
             Pokemon.all_moves['キングシールド'] = Pokemon.all_moves[target_alias]
@@ -295,7 +279,6 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
     selector = analyzer.team_selector
     cfr_solver = analyzer.cfr_solver
 
-    # 1. 世代初期重みの取得・ロード
     pokemon_weights = {name: 1.0 for name in builder.mb_pokemon}
     weights_path = "log/meta_weights.json"
     if os.path.exists(weights_path):
@@ -303,9 +286,6 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
             pokemon_weights.update(json.load(f))
         print("ℹ️ Existing meta weights loaded.")
 
-    # =========================================================================
-    # 🌟 自動再開機能: 既存の JSONL ファイルを自動的にスキャンして開始世代を決定
-    # =========================================================================
     start_generation = 1
     for gen in range(1, total_generations + 1):
         gen_log_path = f"log/selfplay_gen_{gen}.jsonl"
@@ -318,7 +298,7 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
     print(f"  総世代数: {total_generations}世代")
     print(f"  世代ごとの対戦数: {matches_per_gen}回戦")
     if start_generation > 1:
-        print(f"  ✨ 既存の 1～{start_generation - 1} 世代のデータを検出しました。")
+        print(f"  ✨ 既存の 1～{start_generation-1} 世代のデータを検出しました。")
         print(f"  🔄 第 {start_generation} 世代からシミュレーションを再開します。")
     print("==================================================\n")
 
@@ -327,7 +307,6 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
 
         gen_log_path = f"log/selfplay_gen_{gen}.jsonl"
 
-        # A. 自己対戦の実行
         with open(gen_log_path, "w", encoding="utf-8") as f_out:
             for match_idx in range(1, matches_per_gen + 1):
                 try:
@@ -344,10 +323,8 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
                     import traceback
                     traceback.print_exc()
 
-        # B. 世代メタの統計解析
         meta_report = analyze_generation_meta(gen_log_path)
 
-        # C. 解析結果から勝率に基づき「重み（登場確率）」を更新
         learning_rate = 0.5
         for name, stats in meta_report.items():
             if name in pokemon_weights:
@@ -355,12 +332,10 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
                 weight_delta = 1.0 + learning_rate * (win_rate - 0.5)
                 pokemon_weights[name] = max(0.1, min(10.0, pokemon_weights[name] * weight_delta))
 
-        # 重みデータの保存
         os.makedirs("log", exist_ok=True)
         with open(weights_path, "w", encoding="utf-8") as f_out:
             json.dump(pokemon_weights, f_out, ensure_ascii=False, indent=2)
 
-        # D. バリューネットワーク（価値予測モデル）のオンライン追加学習
         print(f"🔄 世代 {gen} の対戦ログを用いて価値予測AI（PyTorch）を追加学習中...")
         train_model(
             log_path=gen_log_path,
@@ -369,13 +344,7 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
             lr=1e-4
         )
 
-        # =========================================================================
-        # 🌟 E. 勝率上位3位（Top 3）の個別構築自動保存処理
-        # 【勝利数フィルタ】: 原則「3勝（Wins >= 3）」以上を最強選出の条件とする
-        # =========================================================================
         filtered_meta = [item for item in meta_report.items() if item[1]["wins"] >= 3]
-
-        # 3勝以上の個体が極端に少ない場合の段階的フォールバック
         if len(filtered_meta) < 3:
             filtered_meta = [item for item in meta_report.items() if item[1]["wins"] >= 2]
         if len(filtered_meta) < 3:
@@ -383,7 +352,6 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
         if not filtered_meta:
             filtered_meta = list(meta_report.items())
 
-        # 勝率 ➔ 勝利数（Wins） の順で降順ソート
         sorted_meta = sorted(filtered_meta, key=lambda x: (-x[1]["win_rate"], -x[1]["wins"]))
 
         print(f"💾 世代 {gen} の勝率上位3構築をファイルに保存します...")
@@ -391,7 +359,6 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
             if len(sorted_meta) >= rank:
                 top_poke_name = sorted_meta[rank - 1][0]
                 try:
-                    # 該当ポケモンを軸とした6体構築を生成
                     rank_party = builder.build_team(top_poke_name)
 
                     rank_path = f"log/party_gen{gen}_rank{rank}.json"
@@ -402,15 +369,10 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
                     with open(shortcut_path, "w", encoding="utf-8") as f_short:
                         json.dump(rank_party, f_short, ensure_ascii=False, indent=2)
 
-                    print(
-                        f"   - {rank}位軸: 【{top_poke_name}】 (勝利数: {sorted_meta[rank - 1][1]['wins']}) ➔ {rank_path} に保存完了")
+                    print(f"   - {rank}位軸: 【{top_poke_name}】 (勝利数: {sorted_meta[rank-1][1]['wins']}) ➔ {rank_path} に保存完了")
                 except Exception as e:
                     print(f"   - {rank}位軸: {top_poke_name} の構築生成中にエラーが発生しました: {e}")
 
-        # =========================================================================
-        # 🌟 F. 世代終了時の『環境上位10（Meta Top 10）』の出力
-        # こちらも「3勝以上（Wins >= 3）」を満たした実力派を優先表示
-        # =========================================================================
         display_filtered = [item for item in meta_report.items() if item[1]["wins"] >= 3]
         if len(display_filtered) < 5:
             display_filtered = [item for item in meta_report.items() if item[1]["wins"] >= 2]
@@ -426,8 +388,7 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
         print(f"==================================================")
         for rank, (name, info) in enumerate(display_meta, 1):
             preferred_moves = ", ".join(info["preferred_moves"])
-            print(
-                f"  {rank}位: 【{name}】 (勝率: {info['win_rate']:.1%}, 勝利数(Wins): {info['wins']}, 選出回数(Picks): {info['picks']})")
+            print(f"  {rank}位: 【{name}】 (勝率: {info['win_rate']:.1%}, 勝利数(Wins): {info['wins']}, 選出回数(Picks): {info['picks']})")
             print(f"       ┗ 最頻持ち物: {info['preferred_item']} | 頻出技: [{preferred_moves}]")
         print(f"==================================================\n")
 
@@ -435,7 +396,7 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
 
 
 # =========================================================================
-# 7. エントリーポイント
+# 7. エントリーポイント (堅牢化モンキーパッチ適用)
 # =========================================================================
 if __name__ == "__main__":
     # シミュレータの初期化
@@ -493,6 +454,41 @@ if __name__ == "__main__":
 
 
     Battle.get_mega_name = patched_get_mega_name
+
+    # -------------------------------------------------------------------------
+    # C. 【Battle.proceed 技インデックス限界突破防止パッチ】
+    # ポケモンの現在の技数を超えるコマンドを検知した場合、安全に0番目の技にフォールバック
+    # -------------------------------------------------------------------------
+    original_proceed = Battle.proceed
+
+
+    def patched_proceed(self, commands=None):
+        # 実行時コマンド（または内部コマンド）を取得・安全検証
+        cmds = commands if commands is not None else self.command
+        if cmds:
+            # 内部コマンド配列の参照ズレを防止するため、ディープコピーして書き換える
+            cmds = list(cmds)
+            for player in range(2):
+                p = self.pokemon[player]
+                if p and p.hp > 0:
+                    cmd = cmds[player]
+                    if cmd is not None:
+                        # 技選択系のコマンド（通常技 < 10, テラスタル技 10 ~ 19）をバリデーション
+                        if cmd < 20:
+                            move_idx = cmd % 10
+                            # 技スロットの要素数（例：2）を上回るインデックスが指定された場合
+                            if move_idx >= len(p.moves):
+                                fallback_idx = 0 if p.moves else 0
+                                if cmd >= 10:  # テラスタル中の場合
+                                    cmds[player] = 10 + fallback_idx
+                                else:
+                                    cmds[player] = fallback_idx
+
+        # 補正済みのコマンド配列を渡して、オリジナルの進行ロジックを実行
+        return original_proceed(self, commands=cmds)
+
+
+    Battle.proceed = patched_proceed
     # -------------------------------------------------------------------------
 
     # ギルガルド・キングシールドの表記揺れ自動同期
@@ -501,5 +497,5 @@ if __name__ == "__main__":
             Pokemon.all_moves['キングシールド'] = Pokemon.all_moves[target_alias]
             break
 
-    # 進化サイクルの始動（1000世代、1世代あたり40試合を自動実行）
+    # 1000世代の進化サイクルを自動再開
     run_evolution_loop(total_generations=1000, matches_per_gen=40)
