@@ -97,12 +97,12 @@ Battle.can_terastal = lambda self, player: False
 
 
 # =========================================================================
-# 3. 【高度化】AegisTeamBuilder (天候岩＆ひかりのねんど動的重みブースト搭載) [2]
+# 3. 【高度化】AegisTeamBuilder (対面・受け数理モデル搭載版) [2]
 # =========================================================================
 class AegisTeamBuilder:
     """
     Project Aegis 構築自動生成システム (Layer 15)
-    Word2Vecによるシナジーと、性格・努力値・持ち物・特性・技の「重み付き対戦特化サンプリング」を統合。
+    Word2Vecの共起相関と、H-A-B-C-D-S実数値に基づく「対面性能・受け性能」の数理式を融合して構築。
     """
 
     MEGA_PROBABILITIES = {
@@ -257,8 +257,65 @@ class AegisTeamBuilder:
                 resistances.append(t_atk)
         return resistances
 
+    # =========================================================================
+    # 🌟 統合：対面性能・受け性能スコア算出エンジン (なおまる数理式) [2]
+    # =========================================================================
+    def calculate_matchup_tactical_scores(self, cand_name: str, opp_name: str) -> Tuple[float, float]:
+        """
+        候補ポケモン(cand_name)と相手(opp_name)の1vs1対面を想定し、
+        物理的な実数値・タイプ耐性から「対面スコア」と「受け(クッション)スコア」を算出する。
+        """
+        try:
+            cand_zukan = Pokemon.zukan.get(cand_name)
+            opp_zukan = Pokemon.zukan.get(opp_name)
+            if not cand_zukan or not opp_zukan:
+                return 0.0, 0.0
+
+            cand_base = cand_zukan["base"]  # H, A, B, C, D, S
+            opp_base = opp_zukan["base"]
+
+            cand_types = cand_zukan["type"]
+            opp_types = opp_zukan["type"]
+
+            # 1. 簡易最大与ダメージの算出 (自身のAかCの高い方 × 相手への最高打点相性)
+            cand_atk = max(cand_base[1], cand_base[3])
+            best_atk_eff = 1.0
+            for c_type in cand_types:
+                for o_type in opp_types:
+                    atk_id = Pokemon.type_id.get(c_type, 0)
+                    def_id = Pokemon.type_id.get(o_type, 0)
+                    eff = Pokemon.type_corrections[atk_id][def_id]
+                    if eff > best_atk_eff:
+                        best_atk_eff = eff
+            max_damage_given = cand_atk * best_atk_eff
+
+            # 2. 簡易最大被ダメージの算出 (相手のAかCの高い方 × 自身への最高打点相性)
+            opp_atk = max(opp_base[1], opp_base[3])
+            best_def_eff = 1.0
+            for o_type in opp_types:
+                for c_type in cand_types:
+                    atk_id = Pokemon.type_id.get(o_type, 0)
+                    def_id = Pokemon.type_id.get(c_type, 0)
+                    eff = Pokemon.type_corrections[atk_id][def_id]
+                    if eff > best_def_eff:
+                        best_def_eff = eff
+            max_damage_taken = opp_atk * best_def_eff
+
+            # 3. 素早さ係数 (S実数値で上を取れる場合は1.5、それ以外は1.0)
+            speed_coefficient = 1.5 if cand_base[5] > opp_base[5] else 1.0
+
+            # 4. 対面スコア (最大与ダメージ * S係数 + 自身のHP - 最大被ダメージ)
+            taimen_score = (max_damage_given * speed_coefficient) + cand_base[0] - max_damage_taken
+
+            # 5. 受けスコア ((自身のHP - 最大被ダメージ) / 自身のHP)
+            uke_score = (cand_base[0] - max_damage_taken) / cand_base[0] if cand_base[0] > 0 else 0.0
+
+            return taimen_score, uke_score
+        except Exception:
+            return 0.0, 0.0
+
     def build_team(self, core_name: str, pokemon_weights: Optional[dict] = None) -> Dict[str, Any]:
-        """軸(コア)に基づき、タイプ補完、Word2Vec共起、および動的な型勝率重みを反映して構築"""
+        """軸(コア)に基づき、対面・受け性能の数理評価、Word2Vec共起、型勝率重みをブレンドして構築"""
         if core_name == "ギルガルド" and "ギルガルド" not in Pokemon.zukan:
             for k in ['ギルガルド(シールド)', 'ギルガルド（シールド）']:
                 if k in Pokemon.zukan:
@@ -302,10 +359,27 @@ class AegisTeamBuilder:
                        team_members):
                     continue
 
+                # A. 既存のタイプ相性補完基礎スコア
                 cand_res = self.calculate_resistances(Pokemon.zukan[candidate]["type"])
                 type_score = sum(2.0 if w in cand_res else 0.0 for w in current_weaknesses)
                 type_score += sum(Pokemon.zukan[candidate]["base"]) * 0.001
 
+                # 🌟 B. 【新規統合】対面性能・受け性能の数理評価スコアのブレンド [2]
+                taimen_sum = 0.0
+                uke_sum = 0.0
+                for member in team_members:
+                    taimen, uke = self.calculate_matchup_tactical_scores(candidate, member)
+                    taimen_sum += taimen
+                    uke_sum += uke
+
+                # 平均対面・受け性能を算出して加算 (比重調整用の定数倍を適用)
+                avg_taimen = taimen_sum / len(team_members)
+                avg_uke = uke_sum / len(team_members)
+
+                # 補正としてスコアに上乗せ
+                type_score += (avg_taimen * 0.01) + (avg_uke * 1.5)
+
+                # C. Word2Vecによる人間共起シナジースコア
                 w2v_score = 0.0
                 if self.w2v_model:
                     synergies = [self.get_w2v_synergy(m, candidate) for m in team_members]
@@ -326,14 +400,12 @@ class AegisTeamBuilder:
         normal_items_pool = list(self.mb_items - mega_stones_in_pool)
 
         for member in team_members:
-            # 図鑑データの特性スキャン
             zukan_entry = Pokemon.zukan.get(member, {})
             abilities = zukan_entry.get("ability", [])
 
             mega_stone_name = member.split("(")[0] + "ナイト"
 
             if mega_stone_name in self.mb_items:
-                # メガシンカ確率の動的決定 (ユーザーのカスタム重みを適用) [2]
                 mega_prob = self.MEGA_PROBABILITIES.get(member, 0.50)
                 if random.random() < mega_prob:
                     assigned_items[member] = mega_stone_name
@@ -342,10 +414,9 @@ class AegisTeamBuilder:
             # 通常持ち物の重複排除重み付き選定
             available_items = [item for item in normal_items_pool if item not in assigned_items.values()]
             if available_items:
-                # ポケモンごとにローカルのアイテム重みテーブルをコピーして動的補正
                 local_item_tiers = dict(self.ITEM_TIERS)
 
-                # 🌟 要望: 天候発動特性を検知した場合、対応する「いわ（岩）」の重みを動的ブースト [2]
+                # 天候発動特性を検知した場合、対応する「いわ（岩）」の重みを動的ブースト
                 if "ひでり" in abilities:
                     local_item_tiers["あついいわ"] = 5.0
                 if "あめふらし" in abilities:
@@ -355,7 +426,7 @@ class AegisTeamBuilder:
                 if "ゆきふらし" in abilities:
                     local_item_tiers["つめたいいわ"] = 5.0
 
-                # 🌟 要望: 主要な壁貼り要員を検知した場合、「ひかりのねんど」の重みを動的ブースト [2]
+                # 主要な壁貼り要員を検知した場合、「ひかりのねんど」の重みを動的ブースト
                 base_member_name = member.split("(")[0]
                 if base_member_name in self.WALL_SETTER_POKEMON:
                     local_item_tiers["ひかりのねんど"] = 5.0
