@@ -563,8 +563,8 @@ class AegisTeamBuilder:
                     attack_types = set()
                     for mv in chosen_moves:
                         mv_data = Pokemon.all_moves.get(mv, {})
-                        # 変化（sta）技以外の攻撃技のみを抽出
-                        if mv_data and mv_data.get("class") != "sta":
+                        # "sta" から始まらない（補助変化技以外の）攻撃技のみを抽出
+                        if mv_data and not mv_data.get("class", "").startswith("sta"):
                             true_type = get_true_move_type(mv, ability, pokemon_ttype)
                             attack_types.add(true_type)
 
@@ -1279,6 +1279,13 @@ class AegisAnalyzer(Pokebot):
 
 if __name__ == "__main__":
     Pokemon.init(season=22)
+
+    # 🌟 ここに挿入します
+    Pokemon.attack = property(lambda self: self.status[1])
+    Pokemon.defense = property(lambda self: self.status[2])
+    Pokemon.sp_attack = property(lambda self: self.status[3])
+    Pokemon.sp_defense = property(lambda self: self.status[4])
+    Pokemon.speed = property(lambda self: self.status[5])
 
     # 🌟 配信監視時、表記揺れを吸収して正しいポケモンインスタンスを解決するフック（バグ②の移植）
     original_find = Pokemon.find

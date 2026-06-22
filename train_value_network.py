@@ -76,6 +76,13 @@ from src.rebel.value_network import ReBeLValueNetwork
 device = torch.device("cpu")
 print(f"ℹ️ 使用デバイス: {device} (安全なCPU学習に固定しました)")
 
+# 🌟 独立起動時にも pokepy 内のステータス参照バグを回避するグローバルプロパティ注入パッチ
+Pokemon.attack = property(lambda self: self.status[1])
+Pokemon.defense = property(lambda self: self.status[2])
+Pokemon.sp_attack = property(lambda self: self.status[3])
+Pokemon.sp_defense = property(lambda self: self.status[4])
+Pokemon.speed = property(lambda self: self.status[5])
+
 
 # =========================================================================
 # 3. データセット再現・リプレイ抽出クラス
@@ -89,7 +96,7 @@ class SelfPlayReplayDataset(Dataset):
         self._load_and_replay()
 
     def _load_and_replay(self):
-        print("📊 対戦ログをシミュレータ上でリプレイ中（特徴量抽出）...")
+        print("📊 对戦ログをシミュレータ上でリプレイ中（特徴量抽出）...")
         t0 = time.time()
 
         if not os.path.exists(self.log_path):
@@ -261,8 +268,88 @@ def train_model(log_path: str, model_save_path: str = "src/rebel/value_network.p
 
 
 if __name__ == "__main__":
+    Pokemon.init(season=22)
+
+    # 🌟 A. 表記揺れを吸収する patched_find の常駐化
+    original_find = Pokemon.find
+
+    @classmethod
+    def patched_find(cls, pokemon_list, name=None, display_name=None):
+        res = original_find(pokemon_list, name=name, display_name=display_name)
+        if res is not None:
+            return res
+
+        if name:
+            base_name = name.replace("メガ", "").rstrip("XYＸＹ ").split("(")[0]
+            for p in pokemon_list:
+                p_base = p.name.replace("メガ", "").rstrip("XYＸＹ ").split("(")[0]
+                if p_base == base_name or p.display_name == base_name:
+                    return p
+
+        if pokemon_list:
+            return pokemon_list[0]
+        return None
+
+    Pokemon.find = patched_find
+
+    # 🌟 B. 分岐メガ進化名解決 patched_get_mega_name の常駐化
+    original_get_mega_name = Battle.get_mega_name
+
+    def patched_get_mega_name(self, p: Pokemon) -> str:
+        if not p or not p.item:
+            return ""
+
+        if p.name == "リザードン":
+            if "X" in p.item or "Ｘ" in p.item: return "メガリザードンX"
+            if "Y" in p.item or "Ｙ" in p.item: return "メガリザードンY"
+        elif p.name == "ミュウツー":
+            if "X" in p.item or "Ｘ" in p.item: return "メガミュウツーX"
+            if "Y" in p.item or "Ｙ" in p.item: return "メガミュウツーY"
+        elif p.name == "ライチュウ":
+            if "X" in p.item or "Ｘ" in p.item: return "メガライチュウX"
+            if "Y" in p.item or "Ｙ" in p.item: return "メガライチュウY"
+
+        return original_get_mega_name(self, p)
+
+    Battle.get_mega_name = patched_get_mega_name
+
+    # 🌟 C. 技コマンドクランプ patched_proceed の常駐化（限界突破・空技スロット防止）
+    original_proceed = Battle.proceed
+
+    def patched_proceed(self, commands=None):
+        cmds = commands if commands is not None else self.command
+        if cmds:
+            cmds = list(cmds)
+            for player in range(2):
+                p = self.pokemon[player]
+                if p and p.hp > 0:
+                    if not p.moves:
+                        p.moves = ["わるあがき"]
+                        p.update_status()
+
+                    cmd = cmds[player]
+                    if cmd is not None:
+                        if cmd not in range(20, 26):
+                            move_idx = cmd % 10
+                            if move_idx >= len(p.moves):
+                                fallback_idx = 0
+                                base_offset = (cmd // 10) * 10
+                                cmds[player] = base_offset + fallback_idx
+            self.command = cmds
+
+        return original_proceed(self, commands=cmds)
+
+    Battle.proceed = patched_proceed
+
+    # 表記揺れマッピングの事前登録
+    for target_alias in ['キングズシールド', 'キング・シールド', 'キングズ・シールド']:
+        if target_alias in Pokemon.all_moves:
+            Pokemon.all_moves['キングシールド'] = Pokemon.all_moves[target_alias]
+            break
+
+    # 単体起動時は、カレントのデータセットログを読み込んで訓練します
     log_file_path = "log/selfplay_dataset.jsonl"
     if os.path.exists(log_file_path):
         train_model(log_path=log_file_path, epochs=15, batch_size=64, lr=1e-4)
     else:
-        print(f"⚠️ 訓練データ '{log_file_path}' が見つかりません。先に run_selfplay.py を実行してください。")
+        print(f"⚠️ 訓練データ '{log_file_path}' が見つかりません。先に run_selfplay.py や evolution ログを用意してください。")
