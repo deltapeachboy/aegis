@@ -80,26 +80,19 @@ from train_value_network import train_model
 
 # =========================================================================
 # 🌟 3. 【高度化モンキーパッチ】対面性能・受け性能評価エンジン (なおまる数理式)
-# aegis_bot.py に一切手を触れずに、AegisTeamBuilder クラスを動的に補強する
 # =========================================================================
 def calculate_matchup_tactical_scores(cand_name: str, opp_name: str) -> Tuple[float, float]:
-    """
-    候補ポケモン(cand_name)と相手(opp_name)の1vs1対面を想定し、
-    物理的な実数値・タイプ耐性から「対面スコア」と「受け(クッション)スコア」を算出する。
-    """
     try:
         cand_zukan = Pokemon.zukan.get(cand_name)
         opp_zukan = Pokemon.zukan.get(opp_name)
         if not cand_zukan or not opp_zukan:
             return 0.0, 0.0
 
-        cand_base = cand_zukan["base"]  # H, A, B, C, D, S
+        cand_base = cand_zukan["base"]
         opp_base = opp_zukan["base"]
-
         cand_types = cand_zukan["type"]
         opp_types = opp_zukan["type"]
 
-        # 1. 簡易最大与ダメージの算出 (自身のA or Cの高い方 × 相手への最高打点相性)
         cand_atk = max(cand_base[1], cand_base[3])
         best_atk_eff = 1.0
         for c_type in cand_types:
@@ -111,7 +104,6 @@ def calculate_matchup_tactical_scores(cand_name: str, opp_name: str) -> Tuple[fl
                     best_atk_eff = eff
         max_damage_given = cand_atk * best_atk_eff
 
-        # 2. 簡易最大被ダメージの算出 (相手のA or Cの高い方 × 自身への最高打点相性)
         opp_atk = max(opp_base[1], opp_base[3])
         best_def_eff = 1.0
         for o_type in opp_types:
@@ -123,13 +115,8 @@ def calculate_matchup_tactical_scores(cand_name: str, opp_name: str) -> Tuple[fl
                     best_def_eff = eff
         max_damage_taken = opp_atk * best_def_eff
 
-        # 3. 素早さ係数 (S実数値で上を取れる場合は1.5、それ以外は1.0)
         speed_coefficient = 1.5 if cand_base[5] > opp_base[5] else 1.0
-
-        # 4. 对面スコア (最大与ダメージ * S係数 + 自身のHP - 最大被ダメージ)
         taimen_score = (max_damage_given * speed_coefficient) + cand_base[0] - max_damage_taken
-
-        # 5. 受けスコア ((自身のHP - 最大被ダメージ) / 自身のHP)
         uke_score = (cand_base[0] - max_damage_taken) / cand_base[0] if cand_base[0] > 0 else 0.0
 
         return taimen_score, uke_score
@@ -137,8 +124,29 @@ def calculate_matchup_tactical_scores(cand_name: str, opp_name: str) -> Tuple[fl
         return 0.0, 0.0
 
 
+def allocate_stat_points_randomly(indices: list, total_points: int = 66, max_single: int = 32) -> list:
+    """
+    指定された能力インデックス（例: [1, 3, 5]）に対し、
+    合計total_pointsを、各スロットの最大値max_singleを超えないようにランダム分配する。
+    """
+    points = [0] * 6
+    if not indices:
+        return points
+
+    actual_total = min(total_points, len(indices) * max_single)
+
+    allocated = 0
+    while allocated < actual_total:
+        idx = random.choice(indices)
+        if points[idx] < max_single:
+            points[idx] += 1
+            allocated += 1
+
+    return points
+
+
 def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = None) -> Dict[str, Any]:
-    """【Aegis Patched Build】タイプ補完、Word2Vecに加え、味方同士を殴り合わせた時の対面・受け性能をブレンドして選定"""
+    """【Aegis Patched Build】能力ポイント制に完全適合し、指定能力内ランダム配分とマイルド性格ブーストを統合"""
     if core_name == "ギルガルド" and "ギルガルド" not in Pokemon.zukan:
         for k in ['ギルガルド(シールド)', 'ギルガルド（シールド）']:
             if k in Pokemon.zukan:
@@ -155,7 +163,6 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
 
     team_members = [core_name]
 
-    # 1. メンバー選定ループ
     while len(team_members) < 6:
         current_weaknesses = []
         for member in team_members:
@@ -181,12 +188,10 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
             if any(Pokemon.zukan[candidate]["display_name"] == Pokemon.zukan[m]["display_name"] for m in team_members):
                 continue
 
-            # A. 既存のタイプ相性補完スコア
             cand_res = self.calculate_resistances(Pokemon.zukan[candidate]["type"])
             type_score = sum(2.0 if w in cand_res else 0.0 for w in current_weaknesses)
             type_score += sum(Pokemon.zukan[candidate]["base"]) * 0.001
 
-            # B. 【新規パッチ】採用決定メンバーとの仮想対面から「対面・受け性能」を算出
             taimen_sum = 0.0
             uke_sum = 0.0
             for member in team_members:
@@ -197,10 +202,8 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
             avg_taimen = taimen_sum / len(team_members)
             avg_uke = uke_sum / len(team_members)
 
-            # 実数相性をスコアにブレンド (クッション受け出し性能を 1.5 倍で重視)
             type_score += (avg_taimen * 0.01) + (avg_uke * 1.5)
 
-            # C. Word2Vecによる人間共起シナジースコア
             w2v_score = 0.0
             if self.w2v_model:
                 synergies = [self.get_w2v_synergy(m, candidate) for m in team_members]
@@ -215,31 +218,26 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
         if best_candidate:
             team_members.append(best_candidate)
 
-    # 2. 重み付きアイテム配分 (Item Clause)
     assigned_items = {}
     mega_stones_in_pool = {item for item in self.mb_items if "ナイト" in item}
     normal_items_pool = list(self.mb_items - mega_stones_in_pool)
 
     for member in team_members:
-        # 図鑑データの特性スキャン
         zukan_entry = Pokemon.zukan.get(member, {})
         abilities = zukan_entry.get("ability", [])
 
         mega_stone_name = member.split("(")[0] + "ナイト"
 
         if mega_stone_name in self.mb_items:
-            # メガシンカ確率の動的決定
             mega_prob = self.MEGA_PROBABILITIES.get(member, 0.50)
             if random.random() < mega_prob:
                 assigned_items[member] = mega_stone_name
                 continue
 
-        # 通常持ち物の重複排除重み付き選定
         available_items = [item for item in normal_items_pool if item not in assigned_items.values()]
         if available_items:
             local_item_tiers = dict(self.ITEM_TIERS)
 
-            # 天候特性検出時のいわブースト
             if "ひでり" in abilities:
                 local_item_tiers["あついいわ"] = 5.0
             if "あめふらし" in abilities:
@@ -249,7 +247,6 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
             if "ゆきふらし" in abilities:
                 local_item_tiers["つめたいいわ"] = 5.0
 
-            # 壁貼りポケモン検出時の粘土ブースト
             base_member_name = member.split("(")[0]
             if base_member_name in self.WALL_SETTER_POKEMON:
                 local_item_tiers["ひかりのねんど"] = 5.0
@@ -260,55 +257,122 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
         else:
             assigned_items[member] = ""
 
-    # 3. 特性・性格・努力値・技構成の動的重み付き組み立て
     generated_party = {}
     for i, name in enumerate(team_members):
         zukan_entry = Pokemon.zukan[name]
-
         dyn_data = pokemon_weights.get(name, {}) if pokemon_weights else {}
 
-        # 性格の選定
-        natures = list(self.NATURE_WEIGHTS.keys())
-        nature_weights = []
-        for nat in natures:
-            static_w = self.NATURE_WEIGHTS[nat]
-            dynamic_w = dyn_data.get("natures", {}).get(nat, 1.0)
-            nature_weights.append(static_w * dynamic_w)
-        nature = random.choices(natures, weights=nature_weights, k=1)[0]
+        # =========================================================================
+        # 🚀 [能力ポイント(Stat Points)仕様＆性格シナジー決定エンジン]
+        # =========================================================================
+        base_stats = zukan_entry.get("base", [100, 100, 100, 100, 100, 100])
+        h, a, b, c, d, s = base_stats[0], base_stats[1], base_stats[2], base_stats[3], base_stats[4], base_stats[5]
 
-        # 特性の選定
-        abilities = zukan_entry.get("ability", ["とくせいなし"])
-        if abilities:
-            ability_weights = []
-            for ab in abilities:
-                static_w = 2.0 if ab in self.POWERFUL_ABILITIES else 1.0
-                dynamic_w = dyn_data.get("abilities", {}).get(ab, 1.0)
-                ability_weights.append(static_w * dynamic_w)
-            ability = random.choices(abilities, weights=ability_weights, k=1)[0]
+        stat_points = [0] * 6
+        ev_category = "max_out"
+        adj_nature_weights = {}
+
+        # 確率抽選 (極振り 66%, 両刀 4%, 複合調整 30%)
+        rand_ev = random.random()
+
+        if rand_ev < 0.04:
+            # A. 【両刀アタッカー型】 (4%) ➔ 指定3種の中でのポイント配分をランダム化
+            ev_category = "mixed"
+            if random.random() < 0.5:
+                # ACS型 (インデックス 1:A, 3:C, 5:S)
+                stat_points = allocate_stat_points_randomly([1, 3, 5], total_points=66, max_single=32)
+                # マイルド性格ブースト (最大 7.5)
+                adj_nature_weights["せっかち"] = 7.5
+                adj_nature_weights["むじゃき"] = 7.5
+            else:
+                # HAC型 (インデックス 0:H, 1:A, 3:C)
+                stat_points = allocate_stat_points_randomly([0, 1, 3], total_points=66, max_single=32)
+                adj_nature_weights["ゆうかん"] = 7.5
+                adj_nature_weights["れいせい"] = 7.5
+
+        elif rand_ev < 0.34:
+            # B. 【複合調整型】 (30%) ➔ 指定能力スロット内でのポイント配分をランダム化
+            ev_category = "hybrid"
+
+            # 実戦的な複合調整のパターン群（インデックスの組み合わせとして定義）
+            hybrid_patterns = [
+                ("HBD", [0, 2, 4]),  # 総合耐久
+                ("HBDS", [0, 2, 4, 5]),  # 耐久＋素早さ
+                ("HABS", [0, 1, 2, 5]),  # 物理調整アタッカー
+                ("HBCS", [0, 2, 3, 5]),  # 特殊調整アタッカー
+                ("HAB", [0, 1, 2]),  # 物理中耐久
+                ("HBC", [0, 2, 3]),  # 特殊中耐久
+                ("HAD", [0, 1, 4]),  # 物理特防
+                ("HCD", [0, 3, 4]),  # 特殊特防
+                ("HAS", [0, 1, 5]),  # HP・素早さ調整アタッカー (必須)
+                ("HCS", [0, 3, 5]),  # HP・素早さ調整アタッカー (必須)
+                ("HBS", [0, 2, 5]),  # S微振り物理耐久 (必須) ※Sを少し削ってBに回すHS型も自動的に包括
+                ("HDS", [0, 4, 5]),  # S微振り特殊耐久 (必須)
+            ]
+
+            is_physical = a > c
+            valid_patterns = []
+            for name_pat, idx_list in hybrid_patterns:
+                # 物理型・特殊型によるフィルタリング
+                if "A" in name_pat and not is_physical: continue
+                if "C" in name_pat and is_physical: continue
+                valid_patterns.append((name_pat, idx_list))
+
+            if not valid_patterns:
+                valid_patterns = hybrid_patterns
+
+            chosen_pattern_name, target_indices = random.choice(valid_patterns)
+
+            # 上限32の制約を守りつつ、該当スロットに合計66をランダム分配
+            stat_points = allocate_stat_points_randomly(target_indices, total_points=66, max_single=32)
+
+            # 複合調整に合わせたマイルドな性格ブースト (最大 4.0)
+            if "S" in chosen_pattern_name:
+                adj_nature_weights["ようき"] = 4.0
+                adj_nature_weights["おくびょう"] = 4.0
+            elif "B" in chosen_pattern_name or "D" in chosen_pattern_name:
+                adj_nature_weights["ずぶとい"] = 4.0
+                adj_nature_weights["わんぱく"] = 4.0
+                adj_nature_weights["しんちょう"] = 4.0
+                adj_nature_weights["おだやか"] = 4.0
+
         else:
-            ability = "とくせいなし"
+            # C. 【極振り(ブッパ)基本型】 (66%)
+            ev_category = "max_out"
+            is_physical = a > c
 
-        # 努力値配分
-        if random.random() < 0.5:
-            effort = [0] * 6
-            all_indices = [0, 1, 2, 3, 4, 5]
-            max_two = random.sample(all_indices, 2)
-            for idx in max_two:
-                effort[idx] = 252
-            remaining = [idx for idx in all_indices if idx not in max_two]
-            last_four = random.choice(remaining)
-            effort[last_four] = 4
-        else:
-            effort = [0] * 6
-            total_units = 127
-            for _ in range(total_units):
-                valid_indices = [idx for idx in range(6) if effort[idx] < 252]
-                if not valid_indices:
-                    break
-                idx = random.choice(valid_indices)
-                effort[idx] += 4
+            if s >= 75:  # 高速系
+                if is_physical:
+                    # AS極振り、余りH (H: 2, A: 32, S: 32)
+                    stat_points[0], stat_points[1], stat_points[5] = 2, 32, 32
+                    adj_nature_weights["ようき"] = 4.0
+                    adj_nature_weights["いじっぱり"] = 2.5
+                else:
+                    # CS極振り、余りH (H: 2, C: 32, S: 32)
+                    stat_points[0], stat_points[3], stat_points[5] = 2, 32, 32
+                    adj_nature_weights["おくびょう"] = 4.0
+                    adj_nature_weights["ひかえめ"] = 2.5
+            else:  # 低速・耐久サイクル系
+                if is_physical:
+                    if random.random() < 0.5:
+                        # HA極振り、余りS (H: 32, A: 32, S: 2)
+                        stat_points[0], stat_points[1], stat_points[5] = 32, 32, 2
+                        adj_nature_weights["いじっぱり"] = 4.0
+                    else:
+                        # HB極振り、余りD (H: 32, B: 32, D: 2)
+                        stat_points[0], stat_points[2], stat_points[4] = 32, 32, 2
+                        adj_nature_weights["わんぱく"] = 4.0
+                else:
+                    if random.random() < 0.5:
+                        # HC極振り、余りS (H: 32, C: 32, S: 2)
+                        stat_points[0], stat_points[3], stat_points[5] = 32, 32, 2
+                        adj_nature_weights["ひかえめ"] = 4.0
+                    else:
+                        # HD極振り、余りB (H: 32, D: 32, B: 2)
+                        stat_points[0], stat_points[4], stat_points[2] = 32, 32, 2
+                        adj_nature_weights["しんちょう"] = 4.0
 
-        # 技構成の選定
+        # 🚀 [技構成の選定を性格・特性より先行させ、型シナジーを確保]
         learnable = self.learnsets.get(name, ["テラバースト"])
         move_weights = []
         for move_name in learnable:
@@ -317,7 +381,7 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
             if move_data:
                 power = move_data.get("power", 0)
                 priority = move_data.get("priority", 0)
-                move_class = move_data.get("class", "phy")
+                move_class = move_data.get("class", "sta")
 
                 if power >= 80 or priority > 0 or move_name in self.POWERFUL_MOVES_KEYWORDS:
                     static_w = 3.0
@@ -341,6 +405,63 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
             temp_pool.pop(idx)
             temp_weights.pop(idx)
 
+        # 🚀 [確定した技構成に基づく「型シナジーブースト（アプローチ④）」]
+        adj_ability_weights = {}
+
+        """
+        if "りゅうのまい" in chosen_moves or "からをやぶる" in chosen_moves or "つるぎのまい" in chosen_moves:
+            adj_nature_weights["いじっぱり"] = max(adj_nature_weights.get("いじっぱり", 1.0), 5.0)
+            adj_nature_weights["ようき"] = max(adj_nature_weights.get("ようき", 1.0), 5.0)
+            if "マルチスケイル" in zukan_entry.get("ability", []):
+                adj_ability_weights["マルチスケイル"] = 5.0
+            if "かそく" in zukan_entry.get("ability", []):
+                adj_ability_weights["かそく"] = 5.0
+            if "くだけるよろい" in zukan_entry.get("ability", []):
+                adj_ability_weights["くだけるよろい"] = 5.0
+
+        if "めいそう" in chosen_moves or "わるだくみ" in chosen_moves:
+            adj_nature_weights["ひかえめ"] = max(adj_nature_weights.get("ひかえめ", 1.0), 5.0)
+            adj_nature_weights["おくびょう"] = max(adj_nature_weights.get("おくびょう", 1.0), 5.0)
+            if "マルチスケイル" in zukan_entry.get("ability", []):
+                adj_ability_weights["マルチスケイル"] = 5.0
+
+        if "なまける" in chosen_moves or "じこさいせい" in chosen_moves or "やどりぎのタネ" in chosen_moves:
+            adj_nature_weights["ずぶとい"] = max(adj_nature_weights.get("ずぶとい", 1.0), 4.0)
+            adj_nature_weights["わんぱく"] = max(adj_nature_weights.get("わんぱく", 1.0), 4.0)
+            adj_nature_weights["しんちょう"] = max(adj_nature_weights.get("しんちょう", 1.0), 4.0)
+            adj_nature_weights["おだやか"] = max(adj_nature_weights.get("おだやか", 1.0), 4.0)
+            if "てんねん" in zukan_entry.get("ability", []):
+                adj_ability_weights["てんねん"] = 5.0
+            if "さいせいりょく" in zukan_entry.get("ability", []):
+                adj_ability_weights["さいせいりょく"] = 5.0
+        """
+
+        # 性格の最終決定
+        natures = list(self.NATURE_WEIGHTS.keys())
+        nature_weights = []
+        for nat in natures:
+            static_w = self.NATURE_WEIGHTS[nat]
+            dynamic_w = dyn_data.get("natures", {}).get(nat, 1.0)
+            synergy_w = adj_nature_weights.get(nat, 1.0)
+            nature_weights.append(static_w * dynamic_w * synergy_w)
+        nature = random.choices(natures, weights=nature_weights, k=1)[0]
+
+        # 特性の最終決定
+        abilities = zukan_entry.get("ability", ["とくせいなし"])
+        if abilities:
+            ability_weights = []
+            for ab in abilities:
+                static_w = 2.0 if ab in self.POWERFUL_ABILITIES else 1.0
+                dynamic_w = dyn_data.get("abilities", {}).get(ab, 1.0)
+                synergy_w = adj_ability_weights.get(ab, 1.0)
+                ability_weights.append(static_w * dynamic_w * synergy_w)
+            ability = random.choices(abilities, weights=ability_weights, k=1)[0]
+        else:
+            ability = "とくせいなし"
+
+        # 🚀 [シミュレーター互換レイヤー：能力ポイント(0〜32) ➔ 従来努力値(0〜252)へのマッピング]
+        effort = [min(252, sp * 8) for sp in stat_points]
+
         generated_party[str(i)] = {
             "name": name,
             "sex": 1 if i % 2 == 0 else -1,
@@ -359,9 +480,7 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
 
 AegisTeamBuilder.build_team = patched_build_team
 AegisTeamBuilder.calculate_matchup_tactical_scores = calculate_matchup_tactical_scores
-
-
-# =========================================================================
+AegisTeamBuilder.allocate_stat_points_randomly = allocate_stat_points_randomly
 
 
 # =========================================================================
@@ -371,7 +490,6 @@ def generate_evolved_team(builder: AegisTeamBuilder, weights: dict[str, Any]) ->
     """環境の勝率（重み）、および型重みに基づき、優秀な個体・型を引き当てて6体構築を生成する"""
     candidates = list(builder.mb_pokemon)
 
-    # 重みリストの作成（未登録のものはデフォルト値 1.0）
     prob_weights = []
     for name in candidates:
         val = weights.get(name, 1.0)
@@ -383,19 +501,14 @@ def generate_evolved_team(builder: AegisTeamBuilder, weights: dict[str, Any]) ->
     if sum(prob_weights) == 0:
         prob_weights = [1.0] * len(candidates)
 
-    # 重み付きランダムサンプリングで軸を決定
     random_core = random.choices(candidates, weights=prob_weights, k=1)[0]
-
-    # 軸ポケモンに対応する個別の型重みをビルダーに渡してチームを決定
     team_dict = builder.build_team(random_core, pokemon_weights=weights)
 
-    # シミュレータオブジェクトへの復元とデータ型安全変換
     selected_team = []
     for s in team_dict:
         p = Pokemon()
         name = team_dict[s]['name']
 
-        # ギルガルド図鑑の自動補正
         if name == "ギルガルド" and "ギルガルド" not in Pokemon.zukan:
             for k in ['ギルガルド(シールド)', 'ギルガルド（シールド）']:
                 if k in Pokemon.zukan:
@@ -426,10 +539,10 @@ def generate_evolved_team(builder: AegisTeamBuilder, weights: dict[str, Any]) ->
 
 
 # =========================================================================
-# 4. 世代別環境ログ解析システム（型情報：技、特性、性格の勝敗集計）
+# 4. 世代別環境ログ解析システム
 # =========================================================================
 def analyze_generation_meta(log_path: str) -> dict:
-    """その世代の自己対戦結果を集計し、勝率および技、性格、特性の勝利実績を算出する"""
+    """その世代の自己対戦结果を集計し、勝率および技、性格、特性の勝利実績を算出する"""
     if not os.path.exists(log_path):
         return {}
 
@@ -437,7 +550,6 @@ def analyze_generation_meta(log_path: str) -> dict:
     pokemon_wins = Counter()
     pokemon_items = {}
 
-    # 技、特性、性格ごとの勝利数と敗北数の集計
     move_picks = {}
     move_wins = {}
     ability_picks = {}
@@ -475,7 +587,6 @@ def analyze_generation_meta(log_path: str) -> dict:
                         pokemon_items[name] = Counter()
                     pokemon_items[name][item] += 1
 
-                    # 🌟 技・特性・性格の統計集計
                     if name not in move_picks:
                         move_picks[name] = Counter()
                         move_wins[name] = Counter()
@@ -539,7 +650,8 @@ def analyze_generation_meta(log_path: str) -> dict:
 # 5. 自己対戦解決処理
 # =========================================================================
 def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector: AegisTeamSelector, cfr_solver,
-                              analyzer, weights: dict) -> dict:
+                              analyzer, weights: dict, generation: int) -> dict:
+    """🌟 [Soft-CFRアニーリングパッチ] 世代数(generation)を受け取り、意思決定の多様性を調整"""
     match_seed = int(time.time() * 1000) % 1000000
     battle = Battle(seed=match_seed)
 
@@ -588,9 +700,23 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
             pbs = PublicBeliefState.from_battle(battle, perspective=pl, belief=beliefs[pl])
             cfr_solver.solver.num_samples = 3
             my_strategy, _ = cfr_solver.solve(pbs, battle)
+
             if my_strategy:
                 actions = list(my_strategy.keys())
                 probs = list(my_strategy.values())
+
+                # 🚀 [Soft-CFR 温度アニーリングパッチ]
+                temperature = max(0.2, 1.5 - (generation / 200.0))
+
+                adjusted_probs = []
+                for p in probs:
+                    p_safe = max(p, 1e-9)
+                    adjusted_probs.append(p_safe ** (1.0 / temperature))
+
+                sum_adj = sum(adjusted_probs)
+                if sum_adj > 0:
+                    probs = [ap / sum_adj for ap in adjusted_probs]
+
                 commands[pl] = random.choices(actions, weights=probs, k=1)[0]
             else:
                 commands[pl] = random.choice(battle.available_commands(pl))
@@ -640,7 +766,6 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
     selector = analyzer.team_selector
     cfr_solver = analyzer.cfr_solver
 
-    # 1. 世代初期重みのロードとマイグレーション
     pokemon_weights = {}
     weights_path = "log/meta_weights.json"
 
@@ -667,7 +792,6 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
         except Exception as e:
             warnings.warn(f"重みデータのパース・移行に失敗しました(リセットして続行します): {e}")
 
-    # 自動再開スキャン
     start_generation = 1
     for gen in range(1, total_generations + 1):
         gen_log_path = f"log/selfplay_gen_{gen}.jsonl"
@@ -680,7 +804,7 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
     print(f"  総世代数: {total_generations}世代")
     print(f"  世代ごとの対戦数: {matches_per_gen}回戦")
     if start_generation > 1:
-        print(f"  ✨ 既存の 1～{start_generation - 1} 世代のデータを検出しました。")
+        print(f"  ✨ 既存の 1～{start_generation - 1} 世代的データを検出しました。")
         print(f"  🔄 第 {start_generation} 世代からシミュレーションを再開します。")
     print("==================================================\n")
 
@@ -698,24 +822,22 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
                         selector=selector,
                         cfr_solver=cfr_solver,
                         analyzer=analyzer,
-                        weights=pokemon_weights
+                        weights=pokemon_weights,
+                        generation=gen
                     )
                     f_out.write(json.dumps(match_data, ensure_ascii=False) + "\n")
                 except Exception as e:
                     import traceback
                     traceback.print_exc()
 
-        # 世代メタの統計解析
         meta_report = analyze_generation_meta(gen_log_path)
 
-        # 🌟 前世代の1位（勝利数が最多で、かつ選出も多かったトップメタ）を自動特定
         boss_meta = None
         if meta_report:
             sorted_by_tactical = sorted(meta_report.items(), key=lambda x: (-x[1]["wins"], -x[1]["picks"]))
             if sorted_by_tactical:
                 boss_meta = sorted_by_tactical[0][0]
 
-        # 型重みの勝率連動学習
         learning_rate = 0.5
         for name, stats in meta_report.items():
             if name in pokemon_weights:
@@ -738,28 +860,32 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
                     current_nat_w = pokemon_weights[name]["natures"].get(nat, 1.0)
                     pokemon_weights[name]["natures"][nat] = max(0.1, min(10.0, current_nat_w * nat_delta))
 
-        # 🌟 【新規統合：MetaPoke Search】前世代トップメタ（boss_meta）に対するカウンター上位5体を動的ブースト
+        # 🌟 [MetaPoke Search]
         if boss_meta:
             print(f"🎯 [MetaPoke Search] 世代 {gen} のトップメタ 【{boss_meta}】 に対するカウンターポケモンを特定中...")
             meta_candidates = []
             for candidate in builder.mb_pokemon:
                 if candidate == boss_meta:
                     continue
-                # モンキーパッチで追加した数理評価式を用いて対面・受けスコアを計算
                 taimen, uke = calculate_matchup_tactical_scores(candidate, boss_meta)
-                total_counter_score = taimen + (uke * 100.0)  # 対面突破力と受け出し性能の統合評価
+                total_counter_score = taimen + (uke * 100.0)
                 meta_candidates.append((candidate, total_counter_score))
 
-            # メタ性能の高い順にソートして上位5体を抽出
             top_counters = sorted(meta_candidates, key=lambda x: -x[1])[:5]
 
             print(f"   ┗ 検出された対策ポケモン（次世代出現重み1.5倍ブースト対象）:")
             for rank_idx, (counter_name, score) in enumerate(top_counters, 1):
-                # 出現重みを 1.5 倍にブースト (上限10.0を維持)
                 old_w = pokemon_weights[counter_name]["weight"]
-                pokemon_weights[counter_name]["weight"] = max(0.1, min(10.0, old_w * 1.5))
-                print(
-                    f"     {rank_idx}位: 【{counter_name}】 (補正前重み: {old_w:.2f} ➔ 現状維持（4.0超過による制限） | 補正後重み: {pokemon_weights[counter_name]['weight']:.2f})" if old_w >= 4.0 else f"     {rank_idx}位: 【{counter_name}】 (補正前重み: {old_w:.2f} ➔ ブースト適用 | 補正後重み: {pokemon_weights[counter_name]['weight']:.2f})")
+
+                # 🌟 [実処理の不整合バグ修正] 補正前重みが 4.0 未満のときのみ 1.5倍ブーストを実数計算に適用する
+                if old_w < 4.0:
+                    pokemon_weights[counter_name]["weight"] = max(0.1, min(10.0, old_w * 1.5))
+                    print(
+                        f"     {rank_idx}位: 【{counter_name}】 (補正前重み: {old_w:.2f} ➔ ブースト適用 | 補正後重み: {pokemon_weights[counter_name]['weight']:.2f})")
+                else:
+                    # 4.0 以上の強キャラは過剰なインフレを防ぐため現状維持
+                    print(
+                        f"     {rank_idx}位: 【{counter_name}】 (補正前重み: {old_w:.2f} ➔ 現状維持（4.0超過によるブースト制限） | 補正後重み: {old_w:.2f})")
 
         os.makedirs("log", exist_ok=True)
         with open(weights_path, "w", encoding="utf-8") as f_out:
@@ -773,7 +899,6 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
             lr=1e-4
         )
 
-        # 3勝以上基準での Top 3 構築保存
         filtered_meta = [item for item in meta_report.items() if item[1]["wins"] >= 3]
         if len(filtered_meta) < 3:
             filtered_meta = [item for item in meta_report.items() if item[1]["wins"] >= 2]
@@ -880,7 +1005,6 @@ if __name__ == "__main__":
 
     Battle.get_mega_name = patched_get_mega_name
 
-    # C. 【Battle.proceed 技インデックス限界突破防止パッチ】
     original_proceed = Battle.proceed
 
 

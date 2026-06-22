@@ -4,7 +4,7 @@ import json
 
 def generate_aegis_meta_report():
     weights_path = "log/meta_weights.json"
-    report_path = "log/meta_evolution_report_gen192.md"
+    report_path = "battle_data/meta_evolution_report_gen192.md"
 
     if not os.path.exists(weights_path):
         print(f"❌ '{weights_path}' が見つかりません。ループを実行してデータを蓄積させてください。")

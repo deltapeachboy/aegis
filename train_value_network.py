@@ -96,7 +96,7 @@ class SelfPlayReplayDataset(Dataset):
         self._load_and_replay()
 
     def _load_and_replay(self):
-        print("📊 对戦ログをシミュレータ上でリプレイ中（特徴量抽出）...")
+        print("📊 対戦ログをシミュレータ上でリプレイ中（特徴量抽出）...")
         t0 = time.time()
 
         if not os.path.exists(self.log_path):
@@ -171,6 +171,7 @@ class SelfPlayReplayDataset(Dataset):
         print(f"✅ 特徴量抽出完了 (総局面数: {len(self.encoded_states)} 個, 所要時間: {time.time() - t0:.1f}秒)")
 
     def _rebuild_team(self, team_data: list) -> list:
+        """🌟 [バグ修正] ログに記録されている努力値（能力ポイント変換済）、性格、特性をシミュレーター上に100%忠実再現"""
         rebuilt = []
         for raw in team_data:
             p = Pokemon()
@@ -182,10 +183,15 @@ class SelfPlayReplayDataset(Dataset):
                         Pokemon.zukan['ギルガルド']['display_name'] = 'ギルガルド'
                         break
             p.name = name
-            p.item = raw["item"]
-            p.moves = raw["moves"]
-            p.indiv = [31] * 6
-            p.effort = [252, 0, 0, 252, 0, 0] if raw["name"] in ["アシレーヌ", "サーフゴー"] else [0, 252, 0, 0, 0, 252]
+            p.item = raw.get("item", "")
+            p.moves = raw.get("moves", ["テラバースト"])
+            p.indiv = raw.get("indiv", [31] * 6)
+
+            # 🌟 ログから努力値(effort)、性格(nature)、特性(ability)を直接復元（無い場合はフォールバック）
+            p.nature = raw.get("nature", "いじっぱり")
+            p.ability = raw.get("ability", "とくせいなし")
+            p.effort = raw.get("effort", [0] * 6)
+
             p.update_status()
             rebuilt.append(p)
         return rebuilt
@@ -273,6 +279,7 @@ if __name__ == "__main__":
     # 🌟 A. 表記揺れを吸収する patched_find の常駐化
     original_find = Pokemon.find
 
+
     @classmethod
     def patched_find(cls, pokemon_list, name=None, display_name=None):
         res = original_find(pokemon_list, name=name, display_name=display_name)
@@ -290,10 +297,12 @@ if __name__ == "__main__":
             return pokemon_list[0]
         return None
 
+
     Pokemon.find = patched_find
 
     # 🌟 B. 分岐メガ進化名解決 patched_get_mega_name の常駐化
     original_get_mega_name = Battle.get_mega_name
+
 
     def patched_get_mega_name(self, p: Pokemon) -> str:
         if not p or not p.item:
@@ -311,10 +320,12 @@ if __name__ == "__main__":
 
         return original_get_mega_name(self, p)
 
+
     Battle.get_mega_name = patched_get_mega_name
 
     # 🌟 C. 技コマンドクランプ patched_proceed の常駐化（限界突破・空技スロット防止）
     original_proceed = Battle.proceed
+
 
     def patched_proceed(self, commands=None):
         cmds = commands if commands is not None else self.command
@@ -339,6 +350,7 @@ if __name__ == "__main__":
 
         return original_proceed(self, commands=cmds)
 
+
     Battle.proceed = patched_proceed
 
     # 表記揺れマッピングの事前登録
@@ -352,4 +364,5 @@ if __name__ == "__main__":
     if os.path.exists(log_file_path):
         train_model(log_path=log_file_path, epochs=15, batch_size=64, lr=1e-4)
     else:
-        print(f"⚠️ 訓練データ '{log_file_path}' が見つかりません。先に run_selfplay.py や evolution ログを用意してください。")
+        print(
+            f"⚠️ 訓練データ '{log_file_path}' が見つかりません。先に run_selfplay.py や evolution ログを用意してください。")
