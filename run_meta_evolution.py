@@ -7,12 +7,15 @@ import io
 import time
 import random
 import warnings
+import signal  # 🌟 タイムアウト強制遮断・パッチ用に追加
 from typing import Any, Optional, Dict, List, Tuple
 from copy import deepcopy
 from collections import Counter
 
 # =========================================================================
 # 0. 【File Path Redirect & Aegislash Data Patch (絶対位置対応版)】
+# どこから実行されても、自身の物理位置から 'battle_data/mb_learnset.json' を
+# 逆算し、強制リダイレクトとギルガルドの技同期を行う頑健なパッチ
 # =========================================================================
 _original_open = builtins.open
 
@@ -69,11 +72,296 @@ sys.modules['src.pokemon_battle_sim.damage'].__dict__.update(pokemon_module.__di
 # =========================================================================
 from pokepy.pokemon import Pokemon
 from pokepy.battle import Battle
-# 🌟 aegis_bot から、完璧にバグフィックスされた AegisTeamBuilder 等をインポート
-from aegis_bot import AegisTeamBuilder, AegisTeamSelector, AegisAnalyzer, get_possible_mega_stones
+from aegis_bot import AegisTeamBuilder, AegisTeamSelector, AegisAnalyzer
 from src.rebel.belief_state import PokemonBeliefState
 from src.rebel.public_state import PublicBeliefState
 from train_value_network import train_model
+
+
+# =========================================================================
+# 🌟 3. 【高度化モンキーパッチ】対面性能・受け性能評価エンジン (なおまる数理式)
+# aegis_bot.py に一切手を触れずに、AegisTeamBuilder クラスを動的に補強する
+# =========================================================================
+def calculate_matchup_tactical_scores(cand_name: str, opp_name: str) -> Tuple[float, float]:
+    """
+    候補ポケモン(cand_name)と相手(opp_name)の1vs1対面を想定し、
+    物理的な実数値・タイプ耐性から「対面スコア」と「受け(クッション)スコア」を算出する。
+    """
+    try:
+        cand_zukan = Pokemon.zukan.get(cand_name)
+        opp_zukan = Pokemon.zukan.get(opp_name)
+        if not cand_zukan or not opp_zukan:
+            return 0.0, 0.0
+
+        cand_base = cand_zukan["base"]  # H, A, B, C, D, S
+        opp_base = opp_zukan["base"]
+
+        cand_types = cand_zukan["type"]
+        opp_types = opp_zukan["type"]
+
+        # 1. 簡易最大与ダメージの算出 (自身のA or Cの高い方 × 相手への最高打点相性)
+        cand_atk = max(cand_base[1], cand_base[3])
+        best_atk_eff = 1.0
+        for c_type in cand_types:
+            for o_type in opp_types:
+                atk_id = Pokemon.type_id.get(c_type, 0)
+                def_id = Pokemon.type_id.get(o_type, 0)
+                eff = Pokemon.type_corrections[atk_id][def_id]
+                if eff > best_atk_eff:
+                    best_atk_eff = eff
+        max_damage_given = cand_atk * best_atk_eff
+
+        # 2. 簡易最大被ダメージの算出 (相手のA or Cの高い方 × 自身への最高打点相性)
+        opp_atk = max(opp_base[1], opp_base[3])
+        best_def_eff = 1.0
+        for o_type in opp_types:
+            for c_type in cand_types:
+                atk_id = Pokemon.type_id.get(o_type, 0)
+                def_id = Pokemon.type_id.get(c_type, 0)
+                eff = Pokemon.type_corrections[atk_id][def_id]
+                if eff > best_def_eff:
+                    best_def_eff = eff
+        max_damage_taken = opp_atk * best_def_eff
+
+        # 3. 素早さ係数 (S実数値で上を取れる場合は1.5、それ以外は1.0)
+        speed_coefficient = 1.5 if cand_base[5] > opp_base[5] else 1.0
+
+        # 4. 对面スコア (最大与ダメージ * S係数 + 自身のHP - 最大被ダメージ)
+        taimen_score = (max_damage_given * speed_coefficient) + cand_base[0] - max_damage_taken
+
+        # 5. 受けスコア ((自身のHP - 最大被ダメージ) / 自身のHP)
+        uke_score = (cand_base[0] - max_damage_taken) / cand_base[0] if cand_base[0] > 0 else 0.0
+
+        return taimen_score, uke_score
+    except Exception:
+        return 0.0, 0.0
+
+
+def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = None) -> Dict[str, Any]:
+    """【Aegis Patched Build】タイプ補完、Word2Vecに加え、味方同士を殴り合わせた時の対面・受け性能をブレンドして選定"""
+    if core_name == "ギルガルド" and "ギルガルド" not in Pokemon.zukan:
+        for k in ['ギルガルド(シールド)', 'ギルガルド（シールド）']:
+            if k in Pokemon.zukan:
+                Pokemon.zukan['ギルガルド'] = deepcopy(Pokemon.zukan[k])
+                Pokemon.zukan['ギルガルド']['display_name'] = 'ギルガルド'
+                break
+
+    if core_name not in Pokemon.zukan:
+        core_name = Pokemon.japanese_display_name.get(core_name, core_name)
+        if core_name not in Pokemon.zukan and Pokemon.zukan_name.get(core_name):
+            core_name = Pokemon.zukan_name[core_name][0]
+        else:
+            raise ValueError(f"指定されたポケモン '{core_name}' は図鑑データに存在しません。")
+
+    team_members = [core_name]
+
+    # 1. メンバー選定ループ
+    while len(team_members) < 6:
+        current_weaknesses = []
+        for member in team_members:
+            current_weaknesses += self.calculate_weaknesses(Pokemon.zukan[member]["type"])
+
+        best_candidate = None
+        max_total_score = -999.0
+
+        for candidate in self.mb_pokemon:
+            if candidate in team_members:
+                continue
+
+            if candidate == "ギルガルド" and "ギルガルド" not in Pokemon.zukan:
+                for k in ['ギルガルド(シールド)', 'ギルガルド（シールド）']:
+                    if k in Pokemon.zukan:
+                        Pokemon.zukan['ギルガルド'] = deepcopy(Pokemon.zukan[k])
+                        Pokemon.zukan['ギルガルド']['display_name'] = 'ギルガルド'
+                        break
+
+            if not Pokemon.zukan.get(candidate):
+                continue
+
+            if any(Pokemon.zukan[candidate]["display_name"] == Pokemon.zukan[m]["display_name"] for m in team_members):
+                continue
+
+            # A. 既存のタイプ相性補完スコア
+            cand_res = self.calculate_resistances(Pokemon.zukan[candidate]["type"])
+            type_score = sum(2.0 if w in cand_res else 0.0 for w in current_weaknesses)
+            type_score += sum(Pokemon.zukan[candidate]["base"]) * 0.001
+
+            # B. 【新規パッチ】採用決定メンバーとの仮想対面から「対面・受け性能」を算出
+            taimen_sum = 0.0
+            uke_sum = 0.0
+            for member in team_members:
+                taimen, uke = calculate_matchup_tactical_scores(candidate, member)
+                taimen_sum += taimen
+                uke_sum += uke
+
+            avg_taimen = taimen_sum / len(team_members)
+            avg_uke = uke_sum / len(team_members)
+
+            # 実数相性をスコアにブレンド (クッション受け出し性能を 1.5 倍で重視)
+            type_score += (avg_taimen * 0.01) + (avg_uke * 1.5)
+
+            # C. Word2Vecによる人間共起シナジースコア
+            w2v_score = 0.0
+            if self.w2v_model:
+                synergies = [self.get_w2v_synergy(m, candidate) for m in team_members]
+                w2v_score = sum(synergies) / len(team_members) if synergies else 0.0
+
+            total_score = type_score + (w2v_score * 5.0)
+
+            if total_score > max_total_score:
+                max_total_score = total_score
+                best_candidate = candidate
+
+        if best_candidate:
+            team_members.append(best_candidate)
+
+    # 2. 重み付きアイテム配分 (Item Clause)
+    assigned_items = {}
+    mega_stones_in_pool = {item for item in self.mb_items if "ナイト" in item}
+    normal_items_pool = list(self.mb_items - mega_stones_in_pool)
+
+    for member in team_members:
+        # 図鑑データの特性スキャン
+        zukan_entry = Pokemon.zukan.get(member, {})
+        abilities = zukan_entry.get("ability", [])
+
+        mega_stone_name = member.split("(")[0] + "ナイト"
+
+        if mega_stone_name in self.mb_items:
+            # メガシンカ確率の動的決定
+            mega_prob = self.MEGA_PROBABILITIES.get(member, 0.50)
+            if random.random() < mega_prob:
+                assigned_items[member] = mega_stone_name
+                continue
+
+        # 通常持ち物の重複排除重み付き選定
+        available_items = [item for item in normal_items_pool if item not in assigned_items.values()]
+        if available_items:
+            local_item_tiers = dict(self.ITEM_TIERS)
+
+            # 天候特性検出時のいわブースト
+            if "ひでり" in abilities:
+                local_item_tiers["あついいわ"] = 5.0
+            if "あめふらし" in abilities:
+                local_item_tiers["しめったいわ"] = 5.0
+            if "すなおこし" in abilities:
+                local_item_tiers["さらさらいわ"] = 5.0
+            if "ゆきふらし" in abilities:
+                local_item_tiers["つめたいいわ"] = 5.0
+
+            # 壁貼りポケモン検出時の粘土ブースト
+            base_member_name = member.split("(")[0]
+            if base_member_name in self.WALL_SETTER_POKEMON:
+                local_item_tiers["ひかりのねんど"] = 5.0
+
+            item_weights = [local_item_tiers.get(itm, 0.1) for itm in available_items]
+            chosen_item = random.choices(available_items, weights=item_weights, k=1)[0]
+            assigned_items[member] = chosen_item
+        else:
+            assigned_items[member] = ""
+
+    # 3. 特性・性格・努力値・技構成の動的重み付き組み立て
+    generated_party = {}
+    for i, name in enumerate(team_members):
+        zukan_entry = Pokemon.zukan[name]
+
+        dyn_data = pokemon_weights.get(name, {}) if pokemon_weights else {}
+
+        # 性格の選定
+        natures = list(self.NATURE_WEIGHTS.keys())
+        nature_weights = []
+        for nat in natures:
+            static_w = self.NATURE_WEIGHTS[nat]
+            dynamic_w = dyn_data.get("natures", {}).get(nat, 1.0)
+            nature_weights.append(static_w * dynamic_w)
+        nature = random.choices(natures, weights=nature_weights, k=1)[0]
+
+        # 特性の選定
+        abilities = zukan_entry.get("ability", ["とくせいなし"])
+        if abilities:
+            ability_weights = []
+            for ab in abilities:
+                static_w = 2.0 if ab in self.POWERFUL_ABILITIES else 1.0
+                dynamic_w = dyn_data.get("abilities", {}).get(ab, 1.0)
+                ability_weights.append(static_w * dynamic_w)
+            ability = random.choices(abilities, weights=ability_weights, k=1)[0]
+        else:
+            ability = "とくせいなし"
+
+        # 努力値配分
+        if random.random() < 0.5:
+            effort = [0] * 6
+            all_indices = [0, 1, 2, 3, 4, 5]
+            max_two = random.sample(all_indices, 2)
+            for idx in max_two:
+                effort[idx] = 252
+            remaining = [idx for idx in all_indices if idx not in max_two]
+            last_four = random.choice(remaining)
+            effort[last_four] = 4
+        else:
+            effort = [0] * 6
+            total_units = 127
+            for _ in range(total_units):
+                valid_indices = [idx for idx in range(6) if effort[idx] < 252]
+                if not valid_indices:
+                    break
+                idx = random.choice(valid_indices)
+                effort[idx] += 4
+
+        # 技構成の選定
+        learnable = self.learnsets.get(name, ["テラバースト"])
+        move_weights = []
+        for move_name in learnable:
+            move_data = Pokemon.all_moves.get(move_name)
+            static_w = 1.0
+            if move_data:
+                power = move_data.get("power", 0)
+                priority = move_data.get("priority", 0)
+                move_class = move_data.get("class", "phy")
+
+                if power >= 80 or priority > 0 or move_name in self.POWERFUL_MOVES_KEYWORDS:
+                    static_w = 3.0
+                elif move_class == "sta" and move_name not in self.POWERFUL_MOVES_KEYWORDS:
+                    static_w = 0.1
+
+            dynamic_w = dyn_data.get("moves", {}).get(move_name, 1.0)
+            move_weights.append(static_w * dynamic_w)
+
+        chosen_moves = []
+        temp_pool = list(learnable)
+        temp_weights = list(move_weights)
+        num_to_select = min(4, len(temp_pool))
+
+        for _ in range(num_to_select):
+            if sum(temp_weights) <= 0:
+                temp_weights = [1.0] * len(temp_pool)
+            chosen = random.choices(temp_pool, weights=temp_weights, k=1)[0]
+            chosen_moves.append(chosen)
+            idx = temp_pool.index(chosen)
+            temp_pool.pop(idx)
+            temp_weights.pop(idx)
+
+        generated_party[str(i)] = {
+            "name": name,
+            "sex": 1 if i % 2 == 0 else -1,
+            "level": 50,
+            "nature": nature,
+            "ability": ability,
+            "item": assigned_items.get(name, ""),
+            "Ttype": zukan_entry["type"][0],
+            "moves": chosen_moves,
+            "indiv": [31, 31, 31, 31, 31, 31],
+            "effort": effort
+        }
+
+    return generated_party
+
+
+AegisTeamBuilder.build_team = patched_build_team
+AegisTeamBuilder.calculate_matchup_tactical_scores = calculate_matchup_tactical_scores
+
+
+# =========================================================================
 
 
 # =========================================================================
@@ -98,7 +386,7 @@ def generate_evolved_team(builder: AegisTeamBuilder, weights: dict[str, Any]) ->
     # 重み付きランダムサンプリングで軸を決定
     random_core = random.choices(candidates, weights=prob_weights, k=1)[0]
 
-    # 軸ポケモンに対応する個別の型重みをビルダーに渡してチームを決定（aegis_bot側の最新ロジックを呼び出す）
+    # 軸ポケモンに対応する個別の型重みをビルダーに渡してチームを決定
     team_dict = builder.build_team(random_core, pokemon_weights=weights)
 
     # シミュレータオブジェクトへの復元とデータ型安全変換
@@ -420,7 +708,7 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
         # 世代メタの統計解析
         meta_report = analyze_generation_meta(gen_log_path)
 
-        # 🌟 前世代の1位を自動特定
+        # 🌟 前世代の1位（勝利数が最多で、かつ選出も多かったトップメタ）を自動特定
         boss_meta = None
         if meta_report:
             sorted_by_tactical = sorted(meta_report.items(), key=lambda x: (-x[1]["wins"], -x[1]["picks"]))
@@ -450,33 +738,28 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
                     current_nat_w = pokemon_weights[name]["natures"].get(nat, 1.0)
                     pokemon_weights[name]["natures"][nat] = max(0.1, min(10.0, current_nat_w * nat_delta))
 
-        # 🌟 【MetaPoke Search】前世代トップメタ（boss_meta）に対するカウンター上位5体を動的ブースト（4.0上限ガード版）
+        # 🌟 【新規統合：MetaPoke Search】前世代トップメタ（boss_meta）に対するカウンター上位5体を動的ブースト
         if boss_meta:
             print(f"🎯 [MetaPoke Search] 世代 {gen} のトップメタ 【{boss_meta}】 に対するカウンターポケモンを特定中...")
             meta_candidates = []
             for candidate in builder.mb_pokemon:
                 if candidate == boss_meta:
                     continue
-                # コアとなるなおまる数理式の計算
-                taimen, uke = builder.calculate_matchup_tactical_scores(candidate, boss_meta)
-                total_counter_score = taimen + (uke * 100.0)
+                # モンキーパッチで追加した数理評価式を用いて対面・受けスコアを計算
+                taimen, uke = calculate_matchup_tactical_scores(candidate, boss_meta)
+                total_counter_score = taimen + (uke * 100.0)  # 対面突破力と受け出し性能の統合評価
                 meta_candidates.append((candidate, total_counter_score))
 
+            # メタ性能の高い順にソートして上位5体を抽出
             top_counters = sorted(meta_candidates, key=lambda x: -x[1])[:5]
 
             print(f"   ┗ 検出された対策ポケモン（次世代出現重み1.5倍ブースト対象）:")
             for rank_idx, (counter_name, score) in enumerate(top_counters, 1):
+                # 出現重みを 1.5 倍にブースト (上限10.0を維持)
                 old_w = pokemon_weights[counter_name]["weight"]
-
-                # 🌟 補正前重みが 4.0 以下の時だけ 1.5倍 ブーストを適用する
-                if old_w <= 4.0:
-                    pokemon_weights[counter_name]["weight"] = max(0.1, min(10.0, old_w * 1.5))
-                    boost_status = "➔ ブースト適用"
-                else:
-                    boost_status = "➔ 現状維持（4.0超過による制限）"
-
+                pokemon_weights[counter_name]["weight"] = max(0.1, min(10.0, old_w * 1.5))
                 print(
-                    f"     {rank_idx}位: 【{counter_name}】 (補正前重み: {old_w:.2f} {boost_status} | 補正後重み: {pokemon_weights[counter_name]['weight']:.2f})")
+                    f"     {rank_idx}位: 【{counter_name}】 (補正前重み: {old_w:.2f} ➔ 現状維持（4.0超過による制限） | 補正後重み: {pokemon_weights[counter_name]['weight']:.2f})" if old_w >= 4.0 else f"     {rank_idx}位: 【{counter_name}】 (補正前重み: {old_w:.2f} ➔ ブースト適用 | 補正後重み: {pokemon_weights[counter_name]['weight']:.2f})")
 
         os.makedirs("log", exist_ok=True)
         with open(weights_path, "w", encoding="utf-8") as f_out:
@@ -550,13 +833,6 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
 if __name__ == "__main__":
     Pokemon.init(season=22)
 
-    # 🌟 ここに挿入します
-    Pokemon.attack = property(lambda self: self.status[1])
-    Pokemon.defense = property(lambda self: self.status[2])
-    Pokemon.sp_attack = property(lambda self: self.status[3])
-    Pokemon.sp_defense = property(lambda self: self.status[4])
-    Pokemon.speed = property(lambda self: self.status[5])
-
     original_find = Pokemon.find
 
 
@@ -604,7 +880,7 @@ if __name__ == "__main__":
 
     Battle.get_mega_name = patched_get_mega_name
 
-    # C. 【Battle.proceed 技インデックス限界突破防止パッチ（完全セキュア＆メガシンカ対応版）】
+    # C. 【Battle.proceed 技インデックス限界突破防止パッチ】
     original_proceed = Battle.proceed
 
 
@@ -615,23 +891,18 @@ if __name__ == "__main__":
             for player in range(2):
                 p = self.pokemon[player]
                 if p and p.hp > 0:
-                    # 技スロットが空（0個）の場合、配列外エラーを防ぐため「わるあがき」を強制常駐させる
                     if not p.moves:
                         p.moves = ["わるあがき"]
                         p.update_status()
 
                     cmd = cmds[player]
                     if cmd is not None:
-                        # 🌟 交代コマンド（20〜25）以外は、すべて何らかの「技選択」とみなす
                         if cmd not in range(20, 26):
                             move_idx = cmd % 10
                             if move_idx >= len(p.moves):
                                 fallback_idx = 0
-                                # 🌟 10の位のオフセット（通常=0, テラ=10, メガ=60など）を動的に抽出してクランプ
                                 base_offset = (cmd // 10) * 10
                                 cmds[player] = base_offset + fallback_idx
-
-            # インスタンス内部の self.command も直接上書きして同期する
             self.command = cmds
 
         return original_proceed(self, commands=cmds)
