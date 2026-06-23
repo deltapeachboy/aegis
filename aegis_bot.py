@@ -93,6 +93,106 @@ from src.rebel.public_state import PublicBeliefState
 from src.rebel.cfr_solver import ReBeLSolver, CFRConfig
 from src.llm.state_representation import battle_to_llm_state
 
+from src.rebel.value_network import ReBeLValueNetwork
+
+# =========================================================================
+# 🌟 [Aegis Reward Shaping Patch] 遅延報酬（ステロ・あくび・砂嵐・能力ランク）補正
+# =========================================================================
+_original_value_network_forward = ReBeLValueNetwork.forward if hasattr(ReBeLValueNetwork, "forward") else None
+
+# =========================================================================
+# 🚀 [Aegis Reward Shaping Patch] 遅延報酬・特殊特性・逆転ギミック価値補正
+# =========================================================================
+from src.rebel.value_network import ReBeLValueNetwork
+
+_original_value_network_forward = ReBeLValueNetwork.forward if hasattr(ReBeLValueNetwork, "forward") else None
+
+
+def shaped_value_network_forward(self, states, *args, **kwargs):
+    predictions = _original_value_network_forward(self, states, *args,
+                                                  **kwargs) if _original_value_network_forward else states
+    try:
+        current_battle = getattr(builtins, "_aegis_current_battle", None)
+        if current_battle and isinstance(current_battle, Battle) and predictions is not None:
+            if predictions.dim() == 2 and predictions.size(0) == 1:
+                my_win_prob = float(predictions[0][0].item())
+                shaped_prob = my_win_prob
+
+                my_side = 0
+                opp_side = 1
+
+                # A. ステルスロック設置ボーナス (期待値勝率 ±0.05 補正)
+                if hasattr(current_battle, 'side_conditions') and current_battle.side_conditions:
+                    if current_battle.side_conditions[opp_side].get('stealth_rock'):
+                        shaped_prob += 0.05
+                    if current_battle.side_conditions[my_side].get('stealth_rock'):
+                        shaped_prob -= 0.05
+
+                # B. あくび・状態異常ボーナス (期待値勝率 ±0.03〜0.04 補正)
+                my_active = current_battle.pokemon[my_side]
+                opp_active = current_battle.pokemon[opp_side]
+
+                if opp_active:
+                    if getattr(opp_active, 'yawn', 0) > 0:
+                        shaped_prob += 0.04
+                    if getattr(opp_active, 'status_con', None):
+                        shaped_prob += 0.03
+
+                if my_active:
+                    if getattr(my_active, 'yawn', 0) > 0:
+                        shaped_prob -= 0.04
+                    if getattr(my_active, 'status_con', None):
+                        shaped_prob -= 0.03
+
+                # C. 能力ランク（積み状態）の価値補正 (A, C, Sは+0.02、B, Dは+0.01)
+                if my_active and hasattr(my_active, 'rank'):
+                    for stat_idx, factor in [(1, 0.02), (3, 0.02), (5, 0.02), (2, 0.01), (4, 0.01)]:
+                        try:
+                            shaped_prob += my_active.rank[stat_idx] * factor
+                        except Exception:
+                            pass
+
+                if opp_active and hasattr(opp_active, 'rank'):
+                    for stat_idx, factor in [(1, 0.02), (3, 0.02), (5, 0.02), (2, 0.01), (4, 0.01)]:
+                        try:
+                            shaped_prob -= opp_active.rank[stat_idx] * factor
+                        except Exception:
+                            pass
+
+                # D. 天候（砂嵐）天候シナジー補正 (勝率 ±0.02 補正)
+                if getattr(current_battle, 'weather', None) == 'sandstorm':
+                    if my_active and any(t in ['いわ', 'じめん', 'はがね'] for t in my_active.types):
+                        shaped_prob += 0.02
+                    if opp_active and any(t in ['いわ', 'じめん', 'はがね'] for t in opp_active.types):
+                        shaped_prob -= 0.02
+
+                # 🌟 E. ミミッキュの「ばけのかわ（インチキ保証）」の価値前借り (勝率 ±0.05 補正)
+                if my_active and my_active.name == "ミミッキュ":
+                    # 化けの皮が残っているミミッキュは、実質HPがもう1本あるため優遇
+                    shaped_prob += 0.05
+                if opp_active and opp_active.name == "ミミッキュ":
+                    shaped_prob -= 0.05
+
+                # 🌟 F. イダイトウの「おはかまいり（逆転火力）」の価値前借り
+                if my_active and "イダイトウ" in my_active.name:
+                    dead_count = sum(1 for p in current_battle.selected[my_side] if p.hp <= 0)
+                    shaped_prob += dead_count * 0.03
+                if opp_active and "イダイトウ" in opp_active.name:
+                    dead_count_opp = sum(1 for p in current_battle.selected[opp_side] if p.hp <= 0)
+                    shaped_prob -= dead_count_opp * 0.03
+
+                shaped_prob = max(0.01, min(0.99, shaped_prob))
+                predictions[0][0] = shaped_prob
+                predictions[0][1] = 1.0 - shaped_prob
+    except Exception:
+        pass
+    return predictions
+
+
+ReBeLValueNetwork.forward = shaped_value_network_forward
+
+# =========================================================================
+
 Battle.can_terastal = lambda self, player: False
 
 
@@ -433,6 +533,16 @@ class AegisTeamBuilder:
             "とけないこおり": "こおり", "まがったスプーン": "エスパー", "ようせいのハネ": "フェアリー"
         }
 
+        # 🌟 各半減実と対応するダメージタイプのマッピング
+        TYPE_REDUCING_BERRIES = {
+            "オッカのみ": "ほのお", "イトケのみ": "みず", "ソクノのみ": "でんき",
+            "リンドのみ": "くさ", "ヤチェのみ": "こおり", "ヨプのみ": "かくとう",
+            "ビアーのみ": "どく", "シュカのみ": "じめん", "バコウのみ": "ひこう",
+            "ウタンのみ": "エスパー", "タンガのみ": "むし", "ヨロギのみ": "いわ",
+            "カシブのみ": "ゴースト", "ハバンのみ": "ドラゴン", "ナモのみ": "あく",
+            "リリバのみ": "はがね", "ロゼルのみ": "フェアリー"
+        }
+
         def get_true_move_type(move_name: str, ab: str, t_type: str) -> str:
             mv_data = Pokemon.all_moves.get(move_name, {})
             base_type = mv_data.get("type", "ノーマル")
@@ -558,7 +668,7 @@ class AegisTeamBuilder:
                 temp_pool.pop(idx)
                 temp_weights.pop(idx)
 
-            # 🚀 [C. 確定技に基づくシナジーロック＆マイルドブースト適用]
+            # 🚀 [C. 確定技に基づくシナジーロック＆マイルドブースト適用] - コメントアウト無効化
             adj_ability_weights = {}
 
             """
@@ -644,6 +754,23 @@ class AegisTeamBuilder:
                             req_type = TYPE_BOOSTING_ITEMS[itm]
                             if req_type not in attack_types:
                                 weight = 0.0
+
+                        # 🌟 【新規仕様】半減実の場合、自身がその属性を弱点（抜群）として持っていなければ完全に除外
+                        if itm in TYPE_REDUCING_BERRIES:
+                            req_type = TYPE_REDUCING_BERRIES[itm]
+                            is_weak = False
+                            if req_type in Pokemon.type_id:
+                                atk_id = Pokemon.type_id[req_type]
+                                eff = 1.0
+                                for def_type in zukan_entry.get("type", []):
+                                    if def_type in Pokemon.type_id:
+                                        def_id = Pokemon.type_id[def_type]
+                                        eff *= Pokemon.type_corrections[atk_id][def_id]
+                                if eff > 1.0:
+                                    is_weak = True
+                            if not is_weak:
+                                weight = 0.0
+
                         item_weights.append(weight)
 
                     if sum(item_weights) <= 0:
@@ -1212,6 +1339,9 @@ class AegisAnalyzer(Pokebot):
         pbs = PublicBeliefState.from_battle(self, perspective=0, belief=self.belief_state)
 
         try:
+            # 🌟 [フック登録] 報酬シェイピングパッチが参照できるように、現在シミュレート中の battle オブジェクトを退避
+            builtins._aegis_current_battle = self
+
             my_strategy, opp_strategy = self.cfr_solver.solve(pbs, self)
         except Exception as e:
             warnings.warn(f"CFRソルバーの計算中にエラーが発生しました。フォールバックします: {e}")
@@ -1346,14 +1476,12 @@ class AegisAnalyzer(Pokebot):
 if __name__ == "__main__":
     Pokemon.init(season=22)
 
-    # 🌟 ここに挿入します
     Pokemon.attack = property(lambda self: self.status[1])
     Pokemon.defense = property(lambda self: self.status[2])
     Pokemon.sp_attack = property(lambda self: self.status[3])
     Pokemon.sp_defense = property(lambda self: self.status[4])
     Pokemon.speed = property(lambda self: self.status[5])
 
-    # 🌟 配信監視時、表記揺れを吸収して正しいポケモンインスタンスを解決するフック（バグ②の移植）
     original_find = Pokemon.find
 
 
@@ -1377,7 +1505,6 @@ if __name__ == "__main__":
 
     Pokemon.find = patched_find
 
-    # 🌟 バシャーモやリザードンなどのメガシンカ表記揺れと分岐（X/Y）を解決するフック（バグ②の移植）
     original_get_mega_name = Battle.get_mega_name
 
 

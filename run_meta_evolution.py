@@ -14,8 +14,6 @@ from collections import Counter
 
 # =========================================================================
 # 0. 【File Path Redirect & Aegislash Data Patch (絶対位置対応版)】
-# どこから実行されても、自身の物理位置から 'battle_data/mb_learnset.json' を
-# 逆算し、強制リダイレクトとギルガルドの技同期を行う頑健なパッチ
 # =========================================================================
 _original_open = builtins.open
 
@@ -28,17 +26,14 @@ def patched_open(file, *args, **kwargs):
         if os.path.exists(custom_path):
             print(f"ℹ️ [Redirect & Patch] '{file}' ➔ '{custom_path}' へ強制リダイレクトロードします。")
 
-            # 1. 実際に mb_learnset.json をロード
             with _original_open(custom_path, "r", encoding="utf-8") as f:
                 learnset = json.load(f)
 
-            # 2. ギルガルド(ブレード/シールド)に技データを同期
             base_key = "ギルガルド" if "ギルガルド" in learnset else "ギルガルド(シールド)"
             if base_key in learnset:
                 learnset["ギルガルド(ブレード)"] = learnset[base_key]
                 learnset["ギルガルド(シールド)"] = learnset[base_key]
 
-            # 3. メモリ上でJSON文字列に戻し、ストリームオブジェクトとしてシミュレータに引き渡す
             patched_json_str = json.dumps(learnset, ensure_ascii=False)
             return io.StringIO(patched_json_str)
 
@@ -76,6 +71,99 @@ from aegis_bot import AegisTeamBuilder, AegisTeamSelector, AegisAnalyzer
 from src.rebel.belief_state import PokemonBeliefState
 from src.rebel.public_state import PublicBeliefState
 from train_value_network import train_model
+
+from src.rebel.value_network import ReBeLValueNetwork
+
+# =========================================================================
+# 🚀 [Aegis Reward Shaping Patch] 遅延報酬・特殊特性・逆転ギミック価値補正
+# =========================================================================
+from src.rebel.value_network import ReBeLValueNetwork
+
+_original_value_network_forward = ReBeLValueNetwork.forward if hasattr(ReBeLValueNetwork, "forward") else None
+
+
+def shaped_value_network_forward(self, states, *args, **kwargs):
+    predictions = _original_value_network_forward(self, states, *args,
+                                                  **kwargs) if _original_value_network_forward else states
+    try:
+        current_battle = getattr(builtins, "_aegis_current_battle", None)
+        if current_battle and isinstance(current_battle, Battle) and predictions is not None:
+            if predictions.dim() == 2 and predictions.size(0) == 1:
+                my_win_prob = float(predictions[0][0].item())
+                shaped_prob = my_win_prob
+
+                my_side = 0
+                opp_side = 1
+
+                # A. ステルスロック設置ボーナス (期待値勝率 ±0.05 補正)
+                if hasattr(current_battle, 'side_conditions') and current_battle.side_conditions:
+                    if current_battle.side_conditions[opp_side].get('stealth_rock'):
+                        shaped_prob += 0.05
+                    if current_battle.side_conditions[my_side].get('stealth_rock'):
+                        shaped_prob -= 0.05
+
+                # B. あくび・状態異常ボーナス (期待値勝率 ±0.03〜0.04 補正)
+                my_active = current_battle.pokemon[my_side]
+                opp_active = current_battle.pokemon[opp_side]
+
+                if opp_active:
+                    if getattr(opp_active, 'yawn', 0) > 0:
+                        shaped_prob += 0.04
+                    if getattr(opp_active, 'status_con', None):
+                        shaped_prob += 0.03
+
+                if my_active:
+                    if getattr(my_active, 'yawn', 0) > 0:
+                        shaped_prob -= 0.04
+                    if getattr(my_active, 'status_con', None):
+                        shaped_prob -= 0.03
+
+                # C. 能力ランク（積み状態）の価値補正 (A, C, Sは+0.02、B, Dは+0.01)
+                if my_active and hasattr(my_active, 'rank'):
+                    for stat_idx, factor in [(1, 0.02), (3, 0.02), (5, 0.02), (2, 0.01), (4, 0.01)]:
+                        try:
+                            shaped_prob += my_active.rank[stat_idx] * factor
+                        except Exception:
+                            pass
+
+                if opp_active and hasattr(opp_active, 'rank'):
+                    for stat_idx, factor in [(1, 0.02), (3, 0.02), (5, 0.02), (2, 0.01), (4, 0.01)]:
+                        try:
+                            shaped_prob -= opp_active.rank[stat_idx] * factor
+                        except Exception:
+                            pass
+
+                # D. 天候（砂嵐）天候シナジー補正 (勝率 ±0.02 補正)
+                if getattr(current_battle, 'weather', None) == 'sandstorm':
+                    if my_active and any(t in ['いわ', 'じめん', 'はがね'] for t in my_active.types):
+                        shaped_prob += 0.02
+                    if opp_active and any(t in ['いわ', 'じめん', 'はがね'] for t in opp_active.types):
+                        shaped_prob -= 0.02
+
+                # 🌟 E. ミミッキュの「ばけのかわ（インチキ保証）」の価値前借り (勝率 ±0.05 補正)
+                if my_active and my_active.name == "ミミッキュ":
+                    # 化けの皮が残っているミミッキュは、実質HPがもう1本あるため優遇
+                    shaped_prob += 0.05
+                if opp_active and opp_active.name == "ミミッキュ":
+                    shaped_prob -= 0.05
+
+                # 🌟 F. イダイトウの「おはかまいり（逆転火力）」の価値前借り
+                if my_active and "イダイトウ" in my_active.name:
+                    dead_count = sum(1 for p in current_battle.selected[my_side] if p.hp <= 0)
+                    shaped_prob += dead_count * 0.03
+                if opp_active and "イダイトウ" in opp_active.name:
+                    dead_count_opp = sum(1 for p in current_battle.selected[opp_side] if p.hp <= 0)
+                    shaped_prob -= dead_count_opp * 0.03
+
+                shaped_prob = max(0.01, min(0.99, shaped_prob))
+                predictions[0][0] = shaped_prob
+                predictions[0][1] = 1.0 - shaped_prob
+    except Exception:
+        pass
+    return predictions
+
+
+ReBeLValueNetwork.forward = shaped_value_network_forward
 
 
 # =========================================================================
@@ -123,12 +211,35 @@ def calculate_matchup_tactical_scores(cand_name: str, opp_name: str) -> Tuple[fl
     except Exception:
         return 0.0, 0.0
 
+# =========================================================================
+# 🌟 [Aegis Helper] メガストーン解決の共通化（run_meta_evolution用追加定義）
+# =========================================================================
+def get_possible_mega_stones(p_name: str) -> List[str]:
+    """ポケモンの日本語名から、データベース上に実在する正しいメガストーン候補のリストを返す"""
+    base = p_name.split("(")[0]
+    special_map = {
+        "リザードン": ["リザードナイトX", "リザードナイトY"],
+        "ライチュウ": ["ライチュウナイトX", "ライチュウナイトY"],
+        "ゲンガー": ["ゲンガナイト"],
+        "ヘルガー": ["ヘルガナイト"],
+        "ペンドラー": ["ペンドラナイト"],
+        "ユキノオー": ["ユキノオナイト"],
+        "ドラミドロ": ["ドラミドナイト"],
+        "ズルズキン": ["ズルズキナイト"],
+        "マフォクシー": ["マフォクシナイト"],
+        "ブリガロン": ["ブリガロナイト"],
+        "シビルドン": ["シビルドナイト"],
+        "ピクシー": ["ピクシナイト"],
+        "カラマネロ": ["カラマネナイト"],
+        "スターミー": ["スターミナイト"],
+        "ジジーロン": ["ジジーロナイト"],
+        "カイリュー": ["カイリュナイト"]
+    }
+    if base in special_map:
+        return special_map[base]
+    return [base + "ナイト"]
 
 def allocate_stat_points_randomly(indices: list, total_points: int = 66, max_single: int = 32) -> list:
-    """
-    指定された能力インデックス（例: [1, 3, 5]）に対し、
-    合計total_pointsを、各スロットの最大値max_singleを超えないようにランダム分配する。
-    """
     points = [0] * 6
     if not indices:
         return points
@@ -146,7 +257,7 @@ def allocate_stat_points_randomly(indices: list, total_points: int = 66, max_sin
 
 
 def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = None) -> Dict[str, Any]:
-    """【Aegis Patched Build】能力ポイント制に完全適合し、指定能力内ランダム配分とマイルド性格ブーストを統合"""
+    """【Aegis Patched Build】能力ポイント制、および半減実弱点適合フィルターを完全統合"""
     if core_name == "ギルガルド" and "ギルガルド" not in Pokemon.zukan:
         for k in ['ギルガルド(シールド)', 'ギルガルド（シールド）']:
             if k in Pokemon.zukan:
@@ -218,6 +329,38 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
         if best_candidate:
             team_members.append(best_candidate)
 
+    # 1.2倍タイプ補強アイテム
+    TYPE_BOOSTING_ITEMS = {
+        "メタルコート": "はがね", "きせきのタネ": "くさ", "もくたん": "ほのお",
+        "しんぴのしずく": "みず", "シルクのスカーフ": "ノーマル", "するどいくちばし": "ひこう",
+        "ぎんのこな": "むし", "じしゃく": "でんき", "かたいいし": "いわ",
+        "のろいのおふだ": "ゴースト", "りゅうのキバ": "ドラゴン", "どくばり": "どく",
+        "やわらかいすな": "じめん", "くろいメガネ": "あく", "くろおび": "かくとう",
+        "とけないこおり": "こおり", "まがったスプーン": "エスパー", "ようせいのハネ": "フェアリー"
+    }
+
+    # 🌟 各半減実と対応するダメージタイプのマッピング
+    TYPE_REDUCING_BERRIES = {
+        "オッカのみ": "ほのお", "イトケのみ": "みず", "ソクノのみ": "でんき",
+        "リンドのみ": "くさ", "ヤチェのみ": "こおり", "ヨプのみ": "かくとう",
+        "ビアーのみ": "どく", "シュカのみ": "じめん", "バコウのみ": "ひこう",
+        "ウタンのみ": "エスパー", "タンガのみ": "むし", "ヨロギのみ": "いわ",
+        "カシブのみ": "ゴースト", "ハバンのみ": "ドラゴン", "ナモのみ": "あく",
+        "リリバのみ": "はがね", "ロゼルのみ": "フェアリー"
+    }
+
+    def get_true_move_type(move_name: str, ab: str, t_type: str) -> str:
+        mv_data = Pokemon.all_moves.get(move_name, {})
+        base_type = mv_data.get("type", "ノーマル")
+        if move_name == "ウェザーボール":
+            if ab == "あめふらし": return "みず"
+            if ab == "ひでり": return "ほのお"
+            if ab == "すなおこし": return "いわ"
+            if ab == "ゆきふらし": return "こおり"
+        elif move_name == "テラバースト":
+            return t_type
+        return base_type
+
     assigned_items = {}
     mega_stones_in_pool = {item for item in self.mb_items if "ナイト" in item}
     normal_items_pool = list(self.mb_items - mega_stones_in_pool)
@@ -276,44 +419,36 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
         rand_ev = random.random()
 
         if rand_ev < 0.04:
-            # A. 【両刀アタッカー型】 (4%) ➔ 指定3種の中でのポイント配分をランダム化
             ev_category = "mixed"
             if random.random() < 0.5:
-                # ACS型 (インデックス 1:A, 3:C, 5:S)
                 stat_points = allocate_stat_points_randomly([1, 3, 5], total_points=66, max_single=32)
-                # マイルド性格ブースト (最大 7.5)
                 adj_nature_weights["せっかち"] = 7.5
                 adj_nature_weights["むじゃき"] = 7.5
             else:
-                # HAC型 (インデックス 0:H, 1:A, 3:C)
                 stat_points = allocate_stat_points_randomly([0, 1, 3], total_points=66, max_single=32)
                 adj_nature_weights["ゆうかん"] = 7.5
                 adj_nature_weights["れいせい"] = 7.5
 
         elif rand_ev < 0.34:
-            # B. 【複合調整型】 (30%) ➔ 指定能力スロット内でのポイント配分をランダム化
             ev_category = "hybrid"
-
-            # 実戦的な複合調整のパターン群（インデックスの組み合わせとして定義）
             hybrid_patterns = [
-                ("HBD", [0, 2, 4]),  # 総合耐久
-                ("HBDS", [0, 2, 4, 5]),  # 耐久＋素早さ
-                ("HABS", [0, 1, 2, 5]),  # 物理調整アタッカー
-                ("HBCS", [0, 2, 3, 5]),  # 特殊調整アタッカー
-                ("HAB", [0, 1, 2]),  # 物理中耐久
-                ("HBC", [0, 2, 3]),  # 特殊中耐久
-                ("HAD", [0, 1, 4]),  # 物理特防
-                ("HCD", [0, 3, 4]),  # 特殊特防
-                ("HAS", [0, 1, 5]),  # HP・素早さ調整アタッカー (必須)
-                ("HCS", [0, 3, 5]),  # HP・素早さ調整アタッカー (必須)
-                ("HBS", [0, 2, 5]),  # S微振り物理耐久 (必須) ※Sを少し削ってBに回すHS型も自動的に包括
-                ("HDS", [0, 4, 5]),  # S微振り特殊耐久 (必須)
+                ("HBD", [0, 2, 4]),
+                ("HBDS", [0, 2, 4, 5]),
+                ("HABS", [0, 1, 2, 5]),
+                ("HBCS", [0, 2, 3, 5]),
+                ("HAB", [0, 1, 2]),
+                ("HBC", [0, 2, 3]),
+                ("HAD", [0, 1, 4]),
+                ("HCD", [0, 3, 4]),
+                ("HAS", [0, 1, 5]),
+                ("HCS", [0, 3, 5]),
+                ("HBS", [0, 2, 5]),
+                ("HDS", [0, 4, 5]),
             ]
 
             is_physical = a > c
             valid_patterns = []
             for name_pat, idx_list in hybrid_patterns:
-                # 物理型・特殊型によるフィルタリング
                 if "A" in name_pat and not is_physical: continue
                 if "C" in name_pat and is_physical: continue
                 valid_patterns.append((name_pat, idx_list))
@@ -322,11 +457,8 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
                 valid_patterns = hybrid_patterns
 
             chosen_pattern_name, target_indices = random.choice(valid_patterns)
-
-            # 上限32の制約を守りつつ、該当スロットに合計66をランダム分配
             stat_points = allocate_stat_points_randomly(target_indices, total_points=66, max_single=32)
 
-            # 複合調整に合わせたマイルドな性格ブースト (最大 4.0)
             if "S" in chosen_pattern_name:
                 adj_nature_weights["ようき"] = 4.0
                 adj_nature_weights["おくびょう"] = 4.0
@@ -337,42 +469,35 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
                 adj_nature_weights["おだやか"] = 4.0
 
         else:
-            # C. 【極振り(ブッパ)基本型】 (66%)
             ev_category = "max_out"
             is_physical = a > c
 
-            if s >= 75:  # 高速系
+            if s >= 75:
                 if is_physical:
-                    # AS極振り、余りH (H: 2, A: 32, S: 32)
                     stat_points[0], stat_points[1], stat_points[5] = 2, 32, 32
                     adj_nature_weights["ようき"] = 4.0
                     adj_nature_weights["いじっぱり"] = 2.5
                 else:
-                    # CS極振り、余りH (H: 2, C: 32, S: 32)
                     stat_points[0], stat_points[3], stat_points[5] = 2, 32, 32
                     adj_nature_weights["おくびょう"] = 4.0
                     adj_nature_weights["ひかえめ"] = 2.5
-            else:  # 低速・耐久サイクル系
+            else:
                 if is_physical:
                     if random.random() < 0.5:
-                        # HA極振り、余りS (H: 32, A: 32, S: 2)
                         stat_points[0], stat_points[1], stat_points[5] = 32, 32, 2
                         adj_nature_weights["いじっぱり"] = 4.0
                     else:
-                        # HB極振り、余りD (H: 32, B: 32, D: 2)
                         stat_points[0], stat_points[2], stat_points[4] = 32, 32, 2
                         adj_nature_weights["わんぱく"] = 4.0
                 else:
                     if random.random() < 0.5:
-                        # HC極振り、余りS (H: 32, C: 32, S: 2)
                         stat_points[0], stat_points[3], stat_points[5] = 32, 32, 2
                         adj_nature_weights["ひかえめ"] = 4.0
                     else:
-                        # HD極振り、余りB (H: 32, D: 32, B: 2)
                         stat_points[0], stat_points[4], stat_points[2] = 32, 32, 2
                         adj_nature_weights["しんちょう"] = 4.0
 
-        # 🚀 [技構成の選定を性格・特性より先行させ、型シナジーを確保]
+        # 🚀 [B. 技構成の選定を先行]
         learnable = self.learnsets.get(name, ["テラバースト"])
         move_weights = []
         for move_name in learnable:
@@ -405,7 +530,7 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
             temp_pool.pop(idx)
             temp_weights.pop(idx)
 
-        # 🚀 [確定した技構成に基づく「型シナジーブースト（アプローチ④）」]
+        # 🚀 [C. 確定した技構成に基づく「型シナジーブースト（アプローチ④）」] - コメントアウト無効化
         adj_ability_weights = {}
 
         """
@@ -459,7 +584,72 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
         else:
             ability = "とくせいなし"
 
-        # 🚀 [シミュレーター互換レイヤー：能力ポイント(0〜32) ➔ 従来努力値(0〜252)へのマッピング]
+        # 🌟 D. [持ち物選定における弱点・攻撃技タイプ適合フィルター]
+        assigned_item = ""
+        mega_stone_name = name.split("(")[0] + "knight"  # メガストーン判定用
+
+        # 本物のWiki/DB定義メガストーン名を取得
+        mega_candidates = get_possible_mega_stones(name)
+        valid_mega_stones = [stone for stone in mega_candidates if stone in self.mb_items]
+
+        if valid_mega_stones and random.random() < self.MEGA_PROBABILITIES.get(name, 0.50):
+            assigned_item = random.choice(valid_mega_stones)
+        else:
+            available_items = [itm for itm in normal_items_pool if itm not in assigned_items.values()]
+            if available_items:
+                local_item_tiers = dict(self.ITEM_TIERS)
+
+                # 天候岩および粘土の動的ブースト
+                if "ひでり" in ability: local_item_tiers["あついいわ"] = 5.0
+                if "あめふらし" in ability: local_item_tiers["しめったいわ"] = 5.0
+                if "すなおこし" in ability: local_item_tiers["さらさらいわ"] = 5.0
+                if "ゆきふらし" in ability: local_item_tiers["つめたいいわ"] = 5.0
+                if name.split("(")[0] in self.WALL_SETTER_POKEMON:
+                    local_item_tiers["ひかりのねんど"] = 5.0
+
+                pokemon_ttype = zukan_entry["type"][0]
+                attack_types = set()
+                for mv in chosen_moves:
+                    mv_data = Pokemon.all_moves.get(mv, {})
+                    if mv_data and not mv_data.get("class", "").startswith("sta"):
+                        true_type = get_true_move_type(mv, ability, pokemon_ttype)
+                        attack_types.add(true_type)
+
+                item_weights = []
+                for itm in available_items:
+                    weight = local_item_tiers.get(itm, 0.1)
+
+                    # 1. 1.2倍補正アイテムの場合、自身の持つ攻撃技のタイプと一致しなければ除外
+                    if itm in TYPE_BOOSTING_ITEMS:
+                        req_type = TYPE_BOOSTING_ITEMS[itm]
+                        if req_type not in attack_types:
+                            weight = 0.0
+
+                    # 🌟 2. 【新規仕様】半減実の場合、自身がその属性を弱点（抜群）として持っていなければ完全に除外
+                    if itm in TYPE_REDUCING_BERRIES:
+                        req_type = TYPE_REDUCING_BERRIES[itm]
+                        is_weak = False
+                        if req_type in Pokemon.type_id:
+                            atk_id = Pokemon.type_id[req_type]
+                            eff = 1.0
+                            for def_type in zukan_entry.get("type", []):
+                                if def_type in Pokemon.type_id:
+                                    def_id = Pokemon.type_id[def_type]
+                                    eff *= Pokemon.type_corrections[atk_id][def_id]
+                            if eff > 1.0:
+                                is_weak = True
+                        if not is_weak:
+                            weight = 0.0
+
+                    item_weights.append(weight)
+
+                if sum(item_weights) <= 0:
+                    item_weights = [1.0] * len(available_items)
+
+                assigned_item = random.choices(available_items, weights=item_weights, k=1)[0]
+
+        assigned_items[name] = assigned_item
+
         effort = [min(252, sp * 8) for sp in stat_points]
 
         generated_party[str(i)] = {
@@ -468,7 +658,7 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
             "level": 50,
             "nature": nature,
             "ability": ability,
-            "item": assigned_items.get(name, ""),
+            "item": assigned_item,
             "Ttype": zukan_entry["type"][0],
             "moves": chosen_moves,
             "indiv": [31, 31, 31, 31, 31, 31],
@@ -542,7 +732,7 @@ def generate_evolved_team(builder: AegisTeamBuilder, weights: dict[str, Any]) ->
 # 4. 世代別環境ログ解析システム
 # =========================================================================
 def analyze_generation_meta(log_path: str) -> dict:
-    """その世代の自己対戦结果を集計し、勝率および技、性格、特性の勝利実績を算出する"""
+    """その世代の自己対戦結果を集計し、勝率および技、性格、特性の勝利実績を算出する"""
     if not os.path.exists(log_path):
         return {}
 
@@ -651,7 +841,6 @@ def analyze_generation_meta(log_path: str) -> dict:
 # =========================================================================
 def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector: AegisTeamSelector, cfr_solver,
                               analyzer, weights: dict, generation: int) -> dict:
-    """🌟 [Soft-CFRアニーリングパッチ] 世代数(generation)を受け取り、意思決定の多様性を調整"""
     match_seed = int(time.time() * 1000) % 1000000
     battle = Battle(seed=match_seed)
 
@@ -699,6 +888,10 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
         for pl in [0, 1]:
             pbs = PublicBeliefState.from_battle(battle, perspective=pl, belief=beliefs[pl])
             cfr_solver.solver.num_samples = 3
+
+            # 🌟 [フック登録] 報酬シェイピングパッチが参照できるように、現在シミュレート中の battle オブジェクトを退避
+            builtins._aegis_current_battle = battle
+
             my_strategy, _ = cfr_solver.solve(pbs, battle)
 
             if my_strategy:
@@ -860,7 +1053,6 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
                     current_nat_w = pokemon_weights[name]["natures"].get(nat, 1.0)
                     pokemon_weights[name]["natures"][nat] = max(0.1, min(10.0, current_nat_w * nat_delta))
 
-        # 🌟 [MetaPoke Search]
         if boss_meta:
             print(f"🎯 [MetaPoke Search] 世代 {gen} のトップメタ 【{boss_meta}】 に対するカウンターポケモンを特定中...")
             meta_candidates = []
