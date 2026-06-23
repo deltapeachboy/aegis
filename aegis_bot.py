@@ -705,7 +705,16 @@ class AegisTeamBuilder:
 
             # 特性サンプリング
             abilities = zukan_entry.get("ability", ["とくせいなし"])
-            if abilities:
+
+            # 🌟 [追加] メタモン専用：8割の確率で「かわりもの」、2割でその他の特性（じゅうなん等）を確定選択
+            if name == "メタモン" and "かわりもの" in abilities:
+                if random.random() < 0.8:
+                    ability = "かわりもの"
+                else:
+                    other_abilities = [ab for ab in abilities if ab != "かわりもの"]
+                    ability = random.choice(other_abilities) if other_abilities else "かわりもの"
+
+            elif abilities:
                 ability_weights = [
                     (2.0 if ab in self.POWERFUL_ABILITIES else 1.0) * dyn_data.get("abilities", {}).get(ab,
                                                                                                         1.0) * adj_ability_weights.get(
