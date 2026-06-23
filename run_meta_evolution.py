@@ -1197,6 +1197,8 @@ if __name__ == "__main__":
 
     Battle.get_mega_name = patched_get_mega_name
 
+    # C. 【Battle.proceed 技インデックス限界突破＆空スロット完全防止パッチ】
+    # C. 【Battle.proceed 技インデックス限界突破＆空スロット完全防止パッチ】
     original_proceed = Battle.proceed
 
 
@@ -1207,14 +1209,49 @@ if __name__ == "__main__":
             for player in range(2):
                 p = self.pokemon[player]
                 if p and p.hp > 0:
-                    if not p.moves:
-                        p.moves = ["わるあがき"]
+                    # 🌟 [動的リアル技再サンプリング仕様]
+                    # ゲッターコピーによるフリーズを防ぎつつ、技が4つ未満の場合は、
+                    # 図鑑データから覚えられる技をランダムに重複なしで抽出してスロットを埋め尽くす
+                    temp_moves = list(p.moves) if hasattr(p, 'moves') and p.moves else []
+
+                    if not temp_moves:
+                        temp_moves = ["わるあがき"]
+
+                    is_modified = False
+                    if len(temp_moves) < 4:
+                        # 本物の習得可能リストを特定（mb_learnsetから）
+                        pokemon_name = p.name
+                        learnable_moves = Pokemon.learnsets.get(pokemon_name, ["わるあがき"])
+
+                        # すでに覚えている技以外の候補を抽出
+                        extra_pool = [m for m in learnable_moves if m not in temp_moves]
+                        needed = 4 - len(temp_moves)
+
+                        if extra_pool:
+                            # 残りスロット分をランダムに重複なしサンプリングして追加
+                            extra_moves = random.sample(extra_pool, min(needed, len(extra_pool)))
+                            temp_moves.extend(extra_moves)
+                            is_modified = True
+
+                        # それでも4つに満たない（元々覚えられる技が極端に少ない）場合のみ、わるあがきで埋める
+                        while len(temp_moves) < 4:
+                            temp_moves.append("わるあがき")
+                            is_modified = True
+
+                    # 技リストに変更があった場合のみ、本体に再代入して update_status を同期
+                    if is_modified:
+                        try:
+                            p.moves = temp_moves
+                        except AttributeError:
+                            # プロパティにセッターが無い場合、名前修飾されたプライベート変数へ直接書き込みを行う
+                            p._Pokemon__moves = temp_moves
                         p.update_status()
 
                     cmd = cmds[player]
                     if cmd is not None:
                         if cmd not in range(20, 26):
                             move_idx = cmd % 10
+                            # 技スロットの範囲外アクセスを検知した場合は、強制的に0番目のスロットにクランプ
                             if move_idx >= len(p.moves):
                                 fallback_idx = 0
                                 base_offset = (cmd // 10) * 10

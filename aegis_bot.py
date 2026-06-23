@@ -96,15 +96,8 @@ from src.llm.state_representation import battle_to_llm_state
 from src.rebel.value_network import ReBeLValueNetwork
 
 # =========================================================================
-# 🌟 [Aegis Reward Shaping Patch] 遅延報酬（ステロ・あくび・砂嵐・能力ランク）補正
-# =========================================================================
-_original_value_network_forward = ReBeLValueNetwork.forward if hasattr(ReBeLValueNetwork, "forward") else None
-
-# =========================================================================
 # 🚀 [Aegis Reward Shaping Patch] 遅延報酬・特殊特性・逆転ギミック価値補正
 # =========================================================================
-from src.rebel.value_network import ReBeLValueNetwork
-
 _original_value_network_forward = ReBeLValueNetwork.forward if hasattr(ReBeLValueNetwork, "forward") else None
 
 
@@ -332,7 +325,7 @@ class AegisTeamBuilder:
     }
 
     POWERFUL_ABILITIES = {
-        "マルチスケイル", "ちからもち", "いたずらごころ",
+        "マルチスケイル", "ち力もち", "いたずらごころ",
         "ひでり", "あめふらし", "すなおこし",
         "ゆきふらし", "テクニシャン", "かそく"
     }
@@ -668,6 +661,16 @@ class AegisTeamBuilder:
                 temp_pool.pop(idx)
                 temp_weights.pop(idx)
 
+            # 🌟 [追加：aegis_bot用リアル技4枠補填仕様]
+            if len(chosen_moves) < 4:
+                extra_pool = [m for m in learnable if m not in chosen_moves]
+                needed = 4 - len(chosen_moves)
+                if extra_pool:
+                    extra_moves = random.sample(extra_pool, min(needed, len(extra_pool)))
+                    chosen_moves.extend(extra_moves)
+                while len(chosen_moves) < 4:
+                    chosen_moves.append("わるあがき")
+
             # 🚀 [C. 確定技に基づくシナジーロック＆マイルドブースト適用] - コメントアウト無効化
             adj_ability_weights = {}
 
@@ -711,8 +714,9 @@ class AegisTeamBuilder:
             abilities = zukan_entry.get("ability", ["とくせいなし"])
             if abilities:
                 ability_weights = [
-                    (2.0 if ab in self.POWERFUL_ABILITIES else 1.0) * dyn_data.get("abilities", {}).get(ab,
-                                                                                                        1.0) * adj_ability_weights.get(
+                    (2.0 if ab in self.POWERFUL_ABILITIES else 1.0) * dyn_data.get("abilities",
+                                                                                    {}).get(ab,
+                                                                                            1.0) * adj_ability_weights.get(
                         ab, 1.0)
                     for ab in abilities
                 ]
