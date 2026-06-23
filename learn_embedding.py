@@ -14,6 +14,24 @@ except ImportError:
     sys.exit(1)
 
 
+def normalize_poke_name(name: str) -> str:
+    """
+    🌟 [新設] フォルムチェンジ、表記揺れ、およびメガシンカによる
+    Word2Vecの単語（ベクトル）空間の分裂を防止するための正規化
+    """
+    # 1. 全角括弧を半角に統一
+    name = name.replace("（", "(").replace("）", ")")
+
+    # 2. メガシンカやフォルム違いの表記をベース名に統合
+    if "ギルガルド" in name:
+        return "ギルガルド"
+
+    # メガリザードンXなどの表記を「リザードン」に統合
+    name = name.replace("メガ", "").rstrip("XYＸＹ ")
+
+    return name
+
+
 def extract_parties_from_logs(log_dir: str) -> List[List[str]]:
     """
     蓄積された自己対戦ログ (selfplay_gen_*.jsonl) から、
@@ -38,10 +56,18 @@ def extract_parties_from_logs(log_dir: str) -> List[List[str]]:
                     # 対戦した両プレイヤーの6体構築を取得
                     for pl in [0, 1]:
                         team = match_data.get("teams", [])[pl]
-                        # 6体の名前をリスト化して文（Sentence）として扱う
-                        poke_names = [p["name"] for p in team if "name" in p]
-                        if len(poke_names) >= 2:
-                            parties.append(poke_names)
+
+                        # 🌟 フォルム違いやメガシンカを正規化しながらリスト化
+                        poke_names = [
+                            normalize_poke_name(p["name"])
+                            for p in team
+                            if "name" in p
+                        ]
+
+                        # 構築の重複（ユニーク化）を排除して1つのSentenceにする
+                        unique_pokes = list(dict.fromkeys(poke_names))
+                        if len(unique_pokes) >= 2:
+                            parties.append(unique_pokes)
                 except Exception:
                     continue
 
@@ -61,6 +87,7 @@ def train_pokemon_word2vec():
     print("🚀 Word2Vec 構築共起モデルのトレーニングを開始します...")
 
     # 2. Word2Vecモデルの設定と訓練
+    # window=6 (6体構築全体をカバー), sg=1 (Skip-gramを採用し、マイナーポケモンの表現力を高める)
     model = Word2Vec(
         sentences=sentences,
         vector_size=32,
@@ -85,13 +112,14 @@ def train_pokemon_word2vec():
     test_pokes = ["サーフゴー", "ブリジュラス", "ガブリアス", "ラウドボーン"]
     print("\n【🔍 構築上の共起類似度（組まれやすさ）のテスト】")
     for poke in test_pokes:
-        if poke in model.wv:
-            print(f"👉 【{poke}】とセットで組まれやすいポケモン Top 3:")
-            # 修正箇所: most_common ➔ most_similar に変更
-            for sim_poke, score in model.wv.most_similar(positive=[poke], topn=3):
+        # 正規化した名称でテスト
+        norm_poke = normalize_poke_name(poke)
+        if norm_poke in model.wv:
+            print(f"👉 【{norm_poke}】とセットで組まれやすいポケモン Top 3:")
+            for sim_poke, score in model.wv.most_similar(positive=[norm_poke], topn=3):
                 print(f"   ┗ {sim_poke} (共起類似度: {score:.3f})")
         else:
-            print(f"👉 【{poke}】は出現回数が不足しているため、モデルに未登録です。")
+            print(f"👉 【{norm_poke}】は出現回数が不足しているため、モデルに未登録です。")
 
 
 if __name__ == "__main__":

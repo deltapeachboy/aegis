@@ -157,12 +157,64 @@ class SelfPlayReplayDataset(Dataset):
                             encoded_pbs = self.analyzer.cfr_solver.value_network.encoder(pbs).cpu()
                         self.encoded_states.append(encoded_pbs)
 
+                        # 🌟 [追加仕様：学習時における期待値の報酬シェイピング]
                         my_win = 1.0 if pl == winner else 0.0
+
+                        # 設置物・天候・能力ランク・ミミッキュ・イダイトウ補正
+                        my_side = pl
+                        opp_side = 1 - pl
+                        my_active = battle.pokemon[my_side]
+                        opp_active = battle.pokemon[opp_side]
+
+                        if hasattr(battle, 'side_conditions') and battle.side_conditions:
+                            if battle.side_conditions[opp_side].get('stealth_rock'): my_win += 0.05
+                            if battle.side_conditions[my_side].get('stealth_rock'): my_win -= 0.05
+
+                        if opp_active:
+                            if getattr(opp_active, 'yawn', 0) > 0: my_win += 0.04
+                            if getattr(opp_active, 'status_con', None): my_win += 0.03
+                            if opp_active.name == "ミミッキュ": my_win -= 0.05
+                            if "イダイトウ" in opp_active.name:
+                                dead_opp = sum(1 for p in battle.selected[opp_side] if p.hp <= 0)
+                                my_win -= dead_opp * 0.03
+
+                        if my_active:
+                            if getattr(my_active, 'yawn', 0) > 0: my_win -= 0.04
+                            if getattr(my_active, 'status_con', None): my_win -= 0.03
+                            if my_active.name == "ミミッキュ": my_win += 0.05
+                            if "イダイトウ" in my_active.name:
+                                dead_my = sum(1 for p in battle.selected[my_side] if p.hp <= 0)
+                                my_win += dead_my * 0.03
+
+                        if my_active and hasattr(my_active, 'rank'):
+                            for s_idx, factor in [(1, 0.02), (3, 0.02), (5, 0.02), (2, 0.01), (4, 0.01)]:
+                                try:
+                                    my_win += my_active.rank[s_idx] * factor
+                                except Exception:
+                                    pass
+
+                        if opp_active and hasattr(opp_active, 'rank'):
+                            for s_idx, factor in [(1, 0.02), (3, 0.02), (5, 0.02), (2, 0.01), (4, 0.01)]:
+                                try:
+                                    my_win -= opp_active.rank[s_idx] * factor
+                                except Exception:
+                                    pass
+
+                        if getattr(battle, 'weather', None) == 'sandstorm':
+                            if my_active and any(
+                                t in ['いわ', 'じめん', 'はがね'] for t in my_active.types): my_win += 0.02
+                            if opp_active and any(
+                                t in ['いわ', 'じめん', 'はがね'] for t in opp_active.types): my_win -= 0.02
+
+                        my_win = max(0.01, min(0.99, my_win))
                         opp_win = 1.0 - my_win
                         self.targets.append(torch.tensor([my_win, opp_win], dtype=torch.float))
 
                     cmds = turn_data["commands"]
                     battle.command = cmds
+
+                    # 🌟 [フック登録] リプレイ進行直前に、現在再現中の battle をパッチへ登録する
+                    builtins._aegis_current_battle = battle
                     battle.proceed(commands=cmds)
 
                 if line_idx % 10 == 0:
@@ -171,7 +223,6 @@ class SelfPlayReplayDataset(Dataset):
         print(f"✅ 特徴量抽出完了 (総局面数: {len(self.encoded_states)} 個, 所要時間: {time.time() - t0:.1f}秒)")
 
     def _rebuild_team(self, team_data: list) -> list:
-        """🌟 [バグ修正] ログに記録されている努力値（能力ポイント変換済）、性格、特性をシミュレーター上に100%忠実再現"""
         rebuilt = []
         for raw in team_data:
             p = Pokemon()
@@ -187,7 +238,6 @@ class SelfPlayReplayDataset(Dataset):
             p.moves = raw.get("moves", ["テラバースト"])
             p.indiv = raw.get("indiv", [31] * 6)
 
-            # 🌟 ログから努力値(effort)、性格(nature)、特性(ability)を直接復元（無い場合はフォールバック）
             p.nature = raw.get("nature", "いじっぱり")
             p.ability = raw.get("ability", "とくせいなし")
             p.effort = raw.get("effort", [0] * 6)
@@ -334,8 +384,29 @@ if __name__ == "__main__":
             for player in range(2):
                 p = self.pokemon[player]
                 if p and p.hp > 0:
-                    if not p.moves:
-                        p.moves = ["わるあがき"]
+                    temp_moves = list(p.moves) if hasattr(p, 'moves') and p.moves else []
+                    if not temp_moves:
+                        temp_moves = ["わるあがき"]
+
+                    is_modified = False
+                    if len(temp_moves) < 4:
+                        pokemon_name = p.name
+                        learnable_moves = Pokemon.learnsets.get(pokemon_name, ["わるあがき"])
+                        extra_pool = [m for m in learnable_moves if m not in temp_moves]
+                        needed = 4 - len(temp_moves)
+                        if extra_pool:
+                            extra_moves = random.sample(extra_pool, min(needed, len(extra_pool)))
+                            temp_moves.extend(extra_moves)
+                            is_modified = True
+                        while len(temp_moves) < 4:
+                            temp_moves.append("わるあがき")
+                            is_modified = True
+
+                    if is_modified:
+                        try:
+                            p.moves = temp_moves
+                        except AttributeError:
+                            p._Pokemon__moves = temp_moves
                         p.update_status()
 
                     cmd = cmds[player]

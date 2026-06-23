@@ -94,52 +94,45 @@ if __name__ == "__main__":
         if not hasattr(Pokemon, 'speed'):
             Pokemon.speed = property(lambda self: self.status[5])
 
-    # 🌟 4. 【Aegis 進行パッチ（一括本物技セッター上書き ＆ コマンドクランプ）】
-    # ゲッターの「コピー返し」仕様を完全に回避するため、一度ローカル変数に退避させてから
-    # 4枠まで拡張し、最後に1度だけセッター（p.moves = new_moves）を叩いて本体を上書きします。
-    # これにより、シミュレータの警告・拒否・および無限ループを 100% 根底から完全に解消します。
+    # 🌟 4. 【Battle.proceed 技インデックス限界突破＆空スロット完全防止パッチ（超堅牢版）】
     original_proceed = Battle.proceed
 
 
     def patched_proceed(self, commands=None):
-        for player in range(2):
-            if self.selected[player]:
-                for p in self.selected[player]:
-                    if p:
-                        # ゲッターから一時コピーを取得
-                        new_moves = list(p.moves) if p.moves else []
-                        if not new_moves:
-                            new_moves = ["わるあがき"]
-
-                        if len(new_moves) < 4:
-                            # 習得可能な本物の技を引っ張ってくる
-                            learnable = Pokemon.learnsets.get(p.name, [])
-                            if not learnable:
-                                learnable = ["テラバースト", "わるあがき", "まもる", "たいあたり"]
-
-                            # 重複を避けながらローカルのコピーリストにアペンド
-                            for move in learnable:
-                                if len(new_moves) >= 4:
-                                    break
-                                if move not in new_moves:
-                                    new_moves.append(move)
-
-                            # それでも足りなければ「わるあがき」で補完
-                            while len(new_moves) < 4:
-                                new_moves.append("わるあがき")
-
-                            # 🌟 最後に1度だけセッターを呼び出して本体を強制更新（これで完全に100%技が4つになります）
-                            p.moves = new_moves
-
-        # B. 【コマンド自動クランプ】
         cmds = commands if commands is not None else self.command
         if cmds:
             cmds = list(cmds)
             for player in range(2):
                 p = self.pokemon[player]
                 if p and p.hp > 0:
-                    if not p.moves:
-                        p.moves = ["わるあがき"]
+                    # [無限ループ回避] ゲッターコピーによるフリーズを防ぐため、一度ローカル変数でリストを拡張する
+                    temp_moves = list(p.moves) if hasattr(p, 'moves') and p.moves else []
+
+                    if not temp_moves:
+                        temp_moves = ["わるあがき"]
+
+                    is_modified = False
+                    if len(temp_moves) < 4:
+                        pokemon_name = p.name
+                        # 図鑑データ（本物の習得技）から安全に再サンプリング
+                        learnable_moves = Pokemon.learnsets.get(pokemon_name, ["わるあがき"])
+                        extra_pool = [m for m in learnable_moves if m not in temp_moves]
+                        needed = 4 - len(temp_moves)
+
+                        if extra_pool:
+                            extra_moves = random.sample(extra_pool, min(needed, len(extra_pool)))
+                            temp_moves.extend(extra_moves)
+                            is_modified = True
+                        while len(temp_moves) < 4:
+                            temp_moves.append("わるあがき")
+                            is_modified = True
+
+                    if is_modified:
+                        try:
+                            p.moves = temp_moves
+                        except AttributeError:
+                            # プロパティにセッターが無い場合、名前修飾されたプライベート変数へ直接書き込みを行う
+                            p._Pokemon__moves = temp_moves
                         p.update_status()
 
                     cmd = cmds[player]
@@ -176,7 +169,7 @@ if __name__ == "__main__":
 
 
     Battle.proceed = patched_proceed
-    print("ℹ️ [Aegis Patch] 一括本物技セッターパッチ ＆ コマンド自動クランプパッチ を適用しました。")
+    print("ℹ️ [Aegis Patch] 超堅牢版・本物技自動再サンプリングパッチ を適用しました。")
 
     # 6. 【Aegis 超高速化パッチ】一括再生中は重い「ベイズ型看破処理」を完全にバイパス
     AegisAnalyzer.update_beliefs_by_implicit_observations = lambda self: None
