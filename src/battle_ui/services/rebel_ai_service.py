@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 import torch
 
 from src.hypothesis.pokemon_usage_database import PokemonUsageDatabase
-from src.pokemon_battle_sim.battle import Battle
+from pokepy.battle import Battle
 from src.rebel.belief_state import Observation, ObservationType, PokemonBeliefState
 from src.rebel.cfr_solver import CFRConfig, ReBeLSolver, check_hopeless_situation
 from src.rebel.public_state import PublicBeliefState

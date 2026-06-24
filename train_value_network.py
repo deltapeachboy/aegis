@@ -177,54 +177,10 @@ class SelfPlayReplayDataset(Dataset):
                                 encoded_pbs = self.analyzer.cfr_solver.value_network.encoder(pbs).cpu()
                             self.encoded_states.append(encoded_pbs)
 
-                            # [追加仕様：期待値の報酬シェイピング算出]
+                            # 🌟 [バグ解消・高速化仕様]
+                            # 価値予測モデルは純粋な勝敗（1.0 / 0.0）をターゲットとして学習させ、
+                            # 中間報酬（ミミッキュ・ステロ・ランク）は推論時に動的に上乗せすることで二重補正を防ぎます。
                             my_win = 1.0 if pl == winner else 0.0
-                            my_side = pl
-                            opp_side = 1 - pl
-                            my_active = battle.pokemon[my_side]
-                            opp_active = battle.pokemon[opp_side]
-
-                            if hasattr(battle, 'side_conditions') and battle.side_conditions:
-                                if battle.side_conditions[opp_side].get('stealth_rock'): my_win += 0.05
-                                if battle.side_conditions[my_side].get('stealth_rock'): my_win -= 0.05
-
-                            if opp_active:
-                                if getattr(opp_active, 'yawn', 0) > 0: my_win += 0.04
-                                if getattr(opp_active, 'status_con', None): my_win += 0.03
-                                if opp_active.name == "ミミッキュ": my_win -= 0.05
-                                if "イダイトウ" in opp_active.name:
-                                    dead_opp = sum(1 for p in battle.selected[opp_side] if p.hp <= 0)
-                                    my_win -= dead_opp * 0.03
-
-                            if my_active:
-                                if getattr(my_active, 'yawn', 0) > 0: my_win -= 0.04
-                                if getattr(my_active, 'status_con', None): my_win -= 0.03
-                                if my_active.name == "ミミッキュ": my_win += 0.05
-                                if "イダイトウ" in my_active.name:
-                                    dead_my = sum(1 for p in battle.selected[my_side] if p.hp <= 0)
-                                    my_win += dead_my * 0.03
-
-                            if my_active and hasattr(my_active, 'rank'):
-                                for s_idx, factor in [(1, 0.02), (3, 0.02), (5, 0.02), (2, 0.01), (4, 0.01)]:
-                                    try:
-                                        my_win += my_active.rank[s_idx] * factor
-                                    except Exception:
-                                        pass
-
-                            if opp_active and hasattr(opp_active, 'rank'):
-                                for s_idx, factor in [(1, 0.02), (3, 0.02), (5, 0.02), (2, 0.01), (4, 0.01)]:
-                                    try:
-                                        my_win -= opp_active.rank[s_idx] * factor
-                                    except Exception:
-                                        pass
-
-                            if getattr(battle, 'weather', None) == 'sandstorm':
-                                if my_active and any(
-                                        t in ['いわ', 'じめん', 'はがね'] for t in my_active.types): my_win += 0.02
-                                if opp_active and any(
-                                        t in ['いわ', 'じめん', 'はがね'] for t in opp_active.types): my_win -= 0.02
-
-                            my_win = max(0.01, min(0.99, my_win))
                             opp_win = 1.0 - my_win
                             self.targets.append(torch.tensor([my_win, opp_win], dtype=torch.float))
 
@@ -235,7 +191,6 @@ class SelfPlayReplayDataset(Dataset):
                         battle.proceed(commands=cmds)
 
                 except ReplayTimeoutException:
-                    # 🌟 タイムアウト時の安全なロールバックとログ出力
                     print(
                         f"⚠️ [Replay Guardian] 試合 {line_idx} の再現中に乱数不整合によるハングを検知したため、この試合の特徴量をスキップします。")
                     self.encoded_states = self.encoded_states[:start_state_idx]
@@ -304,7 +259,7 @@ def train_model(log_path: str, model_save_path: str = "src/rebel/value_network.p
 
     dataset = SelfPlayReplayDataset(log_path, analyzer)
 
-    # 🌟 もし万が一タイムアウト等ですべての試合が弾かれ、総データが0になった場合のクラッシュ防止
+    # 🌟 0件時の安全な進行ガード
     if len(dataset) == 0:
         print("⚠️ 警告: 有効な特徴量が0件です。追加学習を安全にスキップして次の世代へ進行します。")
         return

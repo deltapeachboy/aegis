@@ -1,7 +1,7 @@
 """
 技の有効性計算モジュール
 
-観測情報から各技が相手に有効かどうかを判定する。
+観測情報および信念確率から各技が相手に有効かどうかを判定する。
 これにより、Value Network が「詰み」状態を正しく認識できるようになる。
 
 判定する無効化パターン:
@@ -14,9 +14,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Any
 
-from src.pokemon_battle_sim.pokemon import Pokemon
+# 🌟 赤線警告対策として、仮想空間ではなく直接 pokepy パッケージからインポートします
+from pokepy.pokemon import Pokemon
 
 
 @dataclass
@@ -33,7 +34,7 @@ class MoveEffectivenessCalculator:
     """
     技の有効性を計算するクラス
 
-    観測済み情報（持ち物、特性、タイプ）から、各技が相手に有効かを判定する。
+    観測済み情報および信念状態の確率から、各技が相手に有効かを論理的・確率的に判定する。
     """
 
     # おうごんのからだで無効化される変化技を持つ特性
@@ -133,9 +134,12 @@ class MoveEffectivenessCalculator:
         defender_ability: Optional[str] = None,
         defender_item: Optional[str] = None,
         gravity: bool = False,
+        # 🌟 確率補完用の追加引数
+        belief_state: Optional[Any] = None,
+        pokemon_name: Optional[str] = None,
     ) -> MoveEffectivenessResult:
         """
-        技の有効性を判定
+        技の有効性を判定（未確定情報は信念状態から確率的に補完）
 
         Args:
             move_name: 技名
@@ -143,6 +147,8 @@ class MoveEffectivenessCalculator:
             defender_ability: 防御側の特性（観測済みの場合）
             defender_item: 防御側の持ち物（観測済みの場合）
             gravity: 重力状態かどうか
+            belief_state: 現在の信念状態
+            pokemon_name: 相手のポケモン名
 
         Returns:
             MoveEffectivenessResult
@@ -160,8 +166,26 @@ class MoveEffectivenessCalculator:
         move_type = move_data.get("type")
         move_class = move_data.get("class", "")
 
+        # 🌟 未観測の特性を信念状態の周辺確率から補完
+        active_ability = defender_ability
+        if active_ability is None and belief_state is not None and pokemon_name:
+            ability_dist = belief_state.get_ability_distribution(pokemon_name)
+            if ability_dist:
+                top_ability, prob = max(ability_dist.items(), key=lambda x: x[1])
+                if prob >= 0.70:  # 確信度が70%以上なら適用
+                    active_ability = top_ability
+
+        # 🌟 未観測の持ち物を信念状態の周辺確率から補完
+        active_item = defender_item
+        if active_item is None and belief_state is not None and pokemon_name:
+            item_dist = belief_state.get_item_distribution(pokemon_name)
+            if item_dist:
+                top_item, prob = max(item_dist.items(), key=lambda x: x[1])
+                if prob >= 0.70:  # 確信度が70%以上なら適用
+                    active_item = top_item
+
         # 1. おうごんのからだによる変化技無効
-        if defender_ability == self.GOLDEN_BODY_ABILITY and "sta" in move_class:
+        if active_ability == self.GOLDEN_BODY_ABILITY and "sta" in move_class:
             return MoveEffectivenessResult(
                 move_name=move_name,
                 is_effective=False,
@@ -184,7 +208,7 @@ class MoveEffectivenessCalculator:
         # 3. 地面技に対する無効化チェック
         if move_type == "じめん":
             # ふうせん（重力で無効化される）
-            if defender_item in self.GROUND_IMMUNE_ITEMS and not gravity:
+            if active_item in self.GROUND_IMMUNE_ITEMS and not gravity:
                 return MoveEffectivenessResult(
                     move_name=move_name,
                     is_effective=False,
@@ -193,7 +217,7 @@ class MoveEffectivenessCalculator:
                 )
 
             # ふゆう特性（重力で無効化される）
-            if defender_ability in self.GROUND_IMMUNE_ABILITIES and not gravity:
+            if active_ability in self.GROUND_IMMUNE_ABILITIES and not gravity:
                 return MoveEffectivenessResult(
                     move_name=move_name,
                     is_effective=False,
@@ -211,7 +235,7 @@ class MoveEffectivenessCalculator:
                 )
 
         # 4. 電気技に対する無効化チェック
-        if move_type == "でんき" and defender_ability in self.ELECTRIC_IMMUNE_ABILITIES:
+        if move_type == "でんき" and active_ability in self.ELECTRIC_IMMUNE_ABILITIES:
             return MoveEffectivenessResult(
                 move_name=move_name,
                 is_effective=False,
@@ -220,7 +244,7 @@ class MoveEffectivenessCalculator:
             )
 
         # 5. 炎技に対する無効化チェック
-        if move_type == "ほのお" and defender_ability in self.FIRE_IMMUNE_ABILITIES:
+        if move_type == "ほのお" and active_ability in self.FIRE_IMMUNE_ABILITIES:
             return MoveEffectivenessResult(
                 move_name=move_name,
                 is_effective=False,
@@ -229,7 +253,7 @@ class MoveEffectivenessCalculator:
             )
 
         # 6. 草技に対する無効化チェック
-        if move_type == "くさ" and defender_ability in self.GRASS_IMMUNE_ABILITIES:
+        if move_type == "くさ" and active_ability in self.GRASS_IMMUNE_ABILITIES:
             return MoveEffectivenessResult(
                 move_name=move_name,
                 is_effective=False,
@@ -238,7 +262,7 @@ class MoveEffectivenessCalculator:
             )
 
         # 7. 水技に対する無効化チェック
-        if move_type == "みず" and defender_ability in self.WATER_IMMUNE_ABILITIES:
+        if move_type == "みず" and active_ability in self.WATER_IMMUNE_ABILITIES:
             return MoveEffectivenessResult(
                 move_name=move_name,
                 is_effective=False,
@@ -261,23 +285,15 @@ class MoveEffectivenessCalculator:
         defender_ability: Optional[str] = None,
         defender_item: Optional[str] = None,
         gravity: bool = False,
+        belief_state: Optional[Any] = None,
+        pokemon_name: Optional[str] = None,
     ) -> list[MoveEffectivenessResult]:
         """
         複数の技の有効性を一括判定
-
-        Args:
-            moves: 技名リスト
-            defender_types: 防御側のタイプリスト
-            defender_ability: 防御側の特性（観測済みの場合）
-            defender_item: 防御側の持ち物（観測済みの場合）
-            gravity: 重力状態かどうか
-
-        Returns:
-            各技のMoveEffectivenessResultリスト
         """
         return [
             self.check_move_effectiveness(
-                move, defender_types, defender_ability, defender_item, gravity
+                move, defender_types, defender_ability, defender_item, gravity, belief_state, pokemon_name
             )
             for move in moves
         ]
@@ -289,22 +305,14 @@ class MoveEffectivenessCalculator:
         defender_ability: Optional[str] = None,
         defender_item: Optional[str] = None,
         gravity: bool = False,
+        belief_state: Optional[Any] = None,
+        pokemon_name: Optional[str] = None,
     ) -> bool:
         """
         有効な技が1つでもあるかどうか判定
-
-        Args:
-            moves: 技名リスト
-            defender_types: 防御側のタイプリスト
-            defender_ability: 防御側の特性（観測済みの場合）
-            defender_item: 防御側の持ち物（観測済みの場合）
-            gravity: 重力状態かどうか
-
-        Returns:
-            有効な技があればTrue
         """
         results = self.check_all_moves_effectiveness(
-            moves, defender_types, defender_ability, defender_item, gravity
+            moves, defender_types, defender_ability, defender_item, gravity, belief_state, pokemon_name
         )
         return any(r.is_effective for r in results)
 
@@ -315,22 +323,14 @@ class MoveEffectivenessCalculator:
         defender_ability: Optional[str] = None,
         defender_item: Optional[str] = None,
         gravity: bool = False,
+        belief_state: Optional[Any] = None,
+        pokemon_name: Optional[str] = None,
     ) -> int:
         """
         有効な技の数をカウント
-
-        Args:
-            moves: 技名リスト
-            defender_types: 防御側のタイプリスト
-            defender_ability: 防御側の特性（観測済みの場合）
-            defender_item: 防御側の持ち物（観測済みの場合）
-            gravity: 重力状態かどうか
-
-        Returns:
-            有効な技の数
         """
         results = self.check_all_moves_effectiveness(
-            moves, defender_types, defender_ability, defender_item, gravity
+            moves, defender_types, defender_ability, defender_item, gravity, belief_state, pokemon_name
         )
         return sum(1 for r in results if r.is_effective)
 
@@ -342,20 +342,11 @@ def should_consider_surrender(
     defender_item: str | None = None,
     gravity: bool = False,
     can_switch: bool = False,
+    belief_state: Optional[Any] = None,
+    pokemon_name: Optional[str] = None,
 ) -> bool:
     """
     降参を検討すべき状況かどうかを判定
-
-    Args:
-        attacker_moves: 攻撃側の技リスト
-        defender_types: 防御側のタイプリスト
-        defender_ability: 防御側の特性（観測済みの場合）
-        defender_item: 防御側の持ち物（観測済みの場合）
-        gravity: 重力状態かどうか
-        can_switch: 交代可能かどうか
-
-    Returns:
-        True: 有効な技がなく、交代もできない場合（詰み状態）
     """
     # 交代可能なら降参は不要
     if can_switch:
@@ -368,6 +359,8 @@ def should_consider_surrender(
         defender_ability,
         defender_item,
         gravity,
+        belief_state,
+        pokemon_name,
     )
 
 
@@ -377,17 +370,11 @@ def encode_move_effectiveness_flags(
     defender_ability: Optional[str] = None,
     defender_item: Optional[str] = None,
     gravity: bool = False,
+    belief_state: Optional[Any] = None,
+    pokemon_name: Optional[str] = None,
 ) -> list[float]:
     """
     技の有効性をエンコード用のフラグリストに変換
-
-    Returns:
-        [move0_effective, move1_effective, move2_effective, move3_effective,
-         move0_effectiveness, move1_effectiveness, move2_effectiveness, move3_effectiveness,
-         has_any_effective]
-        - effective: 0.0 = 無効, 1.0 = 有効
-        - effectiveness: タイプ相性倍率を正規化（0.0-1.0）
-        - has_any_effective: 1つでも有効な技があれば1.0
     """
     calculator = MoveEffectivenessCalculator()
 
@@ -403,6 +390,8 @@ def encode_move_effectiveness_flags(
                 defender_ability,
                 defender_item,
                 gravity,
+                belief_state,
+                pokemon_name,
             )
             flags.append(1.0 if result.is_effective else 0.0)
             # 有効性を0-1に正規化（4倍=1.0, 2倍=0.75, 等倍=0.5, 半減=0.25, 無効=0.0）

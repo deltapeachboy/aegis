@@ -9,8 +9,8 @@ import random
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from src.pokemon_battle_sim.battle import Battle
-from src.pokemon_battle_sim.pokemon import Pokemon
+from pokepy.battle import Battle
+from pokepy.battle import Pokemon
 from src.battle_ui.services.session_manager import BattleSession
 
 logger = logging.getLogger(__name__)

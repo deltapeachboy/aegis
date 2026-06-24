@@ -1,7 +1,7 @@
 import math
 import random
 
-from src.pokemon_battle_sim.battle import Battle
+from pokepy.battle import Battle
 
 
 # --- MCTS のノードクラス ---

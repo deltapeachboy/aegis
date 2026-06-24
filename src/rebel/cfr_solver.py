@@ -13,7 +13,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Optional, Protocol
 
-from src.pokemon_battle_sim.battle import Battle
+from pokepy.battle import Battle
 
 from .belief_state import PokemonBeliefState, PokemonTypeHypothesis
 from .public_state import PublicBeliefState, instantiate_battle_from_hypothesis
@@ -51,7 +51,7 @@ def can_deal_damage(battle: Battle, attacker: int) -> bool:
     Returns:
         True: ダメージ手段がある, False: ない
     """
-    from src.pokemon_battle_sim.pokemon import Pokemon
+    from pokepy.battle import Pokemon
 
     defender = 1 - attacker
 
@@ -94,7 +94,7 @@ def _move_can_hit(
     Returns:
         True: ダメージを与えられる可能性がある
     """
-    from src.pokemon_battle_sim.pokemon import Pokemon
+    from pokepy.battle import Pokemon
 
     # 技データを取得
     move_data = Pokemon.all_moves.get(move)

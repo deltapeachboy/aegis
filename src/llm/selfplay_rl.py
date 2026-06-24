@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 from src.llm.policy import LLMPolicy
 from src.llm.reward import composite_reward
 from src.llm.state_representation import LLMAction, battle_to_llm_state
-from src.pokemon_battle_sim.battle import Battle
+from pokepy.battle import Battle
 
 
 @dataclass

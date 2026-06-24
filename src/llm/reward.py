@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from typing import Tuple
 
-from src.pokemon_battle_sim.battle import Battle
-from src.pokemon_battle_sim.pokemon import Pokemon
+from pokepy.battle import Battle
+from pokepy.battle import Pokemon
 
 
 def _total_hp_ratio(party: list[Pokemon]) -> float:

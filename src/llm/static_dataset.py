@@ -19,7 +19,7 @@ from typing import Dict, Iterable, List
 
 from src.llm.action_scoring import score_actions_with_damage
 from src.llm.state_representation import LLMAction, LLMState, battle_to_llm_state
-from src.pokemon_battle_sim.battle import Battle
+from pokepy.battle import Battle
 
 
 @dataclass

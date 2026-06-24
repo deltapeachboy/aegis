@@ -13,8 +13,8 @@ from src.damage_calculator_api.calculators.damage_calculator import DamageCalcul
 from src.damage_calculator_api.models.pokemon_models import MoveInput, PokemonState
 from src.llm.converters import battle_to_battle_conditions, pokemon_to_pokemon_state
 from src.llm.state_representation import LLMAction
-from src.pokemon_battle_sim.battle import Battle
-from src.pokemon_battle_sim.pokemon import Pokemon
+from pokepy.battle import Battle
+from pokepy.battle import Pokemon
 
 
 def _build_move_inputs_from_actions(

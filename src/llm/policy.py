@@ -22,7 +22,7 @@ from src.llm.state_representation import (
     battle_to_llm_state,
     parse_llm_action_output,
 )
-from src.pokemon_battle_sim.battle import Battle
+from pokepy.battle import Battle
 
 
 @dataclass

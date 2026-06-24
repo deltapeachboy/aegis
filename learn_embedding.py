@@ -1,8 +1,16 @@
+"""
+Aegis 構築共起学習モジュール (Word2Vec)
+
+蓄積された自己対戦ログ（selfplay_gen_*.jsonl）の6体構築データを読み込み、
+Word2Vec による分散表現（共起類似度・シナジー）を学習・保存する。
+"""
+
 import sys
 import os
 import json
 import glob
 import warnings
+import multiprocessing
 from typing import List
 
 # gensim（NLPライブラリ）の安全なインポート
@@ -16,20 +24,34 @@ except ImportError:
 
 def normalize_poke_name(name: str) -> str:
     """
-    🌟 [新設] フォルムチェンジ、表記揺れ、およびメガシンカによる
-    Word2Vecの単語（ベクトル）空間の分裂を防止するための正規化
+    🌟 [整合性改善パッチ]
+    フォルムチェンジ、全角/半角、およびメガシンカによる単語（ベクトル）空間の分裂を防止しつつ、
+    チームビルダー（AegisTeamBuilder）が参照する正式図鑑名へのマッピング整合性を保証します。
     """
+    if not name:
+        return ""
+
     # 1. 全角括弧を半角に統一
     name = name.replace("（", "(").replace("）", ")")
 
-    # 2. メガシンカやフォルム違いの表記をベース名に統合
+    # 2. ギルガルドのフォルム（シールド/ブレード）を基本名に統一
     if "ギルガルド" in name:
         return "ギルガルド"
 
-    # メガリザードンXなどの表記を「リザードン」に統合
-    name = name.replace("メガ", "").rstrip("XYＸＹ ")
+    # 3. メガシンカ表記（メガリザードンX 等）をベース名「リザードン」に統合
+    if name.startswith("メガ"):
+        name = name.replace("メガ", "")
+    name = name.rstrip("XYＸＹ ")
 
-    return name
+    # 4. 代表的なフォルム違いのデフォルト図鑑名補正
+    aliases = {
+        "イダイトウ": "イダイトウ(オス)",
+        "イエッサン": "イエッサン(オス)",
+        "ウーラオス": "ウーラオス(いちげき)",
+        "ランドロス": "ランドロス(れいじゅう)",
+        "ギラティナ": "ギラティナ(アナザー)",
+    }
+    return aliases.get(name, name)
 
 
 def extract_parties_from_logs(log_dir: str) -> List[List[str]]:
@@ -64,7 +86,7 @@ def extract_parties_from_logs(log_dir: str) -> List[List[str]]:
                             if "name" in p
                         ]
 
-                        # 構築の重複（ユニーク化）を排除して1つのSentenceにする
+                        # 構築内の重複（ユニーク化）を排除して1つのSentenceにする
                         unique_pokes = list(dict.fromkeys(poke_names))
                         if len(unique_pokes) >= 2:
                             parties.append(unique_pokes)
@@ -86,6 +108,9 @@ def train_pokemon_word2vec():
     print(f"✅ 合計 {len(sentences)} 件の構築文（センテンス）を抽出完了しました。")
     print("🚀 Word2Vec 構築共起モデルのトレーニングを開始します...")
 
+    # 🌟 CPUスレッド数を自動検知して workers に割り当て、学習効率を最大化
+    num_workers = max(1, multiprocessing.cpu_count() - 1)
+
     # 2. Word2Vecモデルの設定と訓練
     # window=6 (6体構築全体をカバー), sg=1 (Skip-gramを採用し、マイナーポケモンの表現力を高める)
     model = Word2Vec(
@@ -93,7 +118,7 @@ def train_pokemon_word2vec():
         vector_size=32,
         window=6,
         min_count=2,
-        workers=4,
+        workers=num_workers,
         epochs=30,
         sg=1
     )

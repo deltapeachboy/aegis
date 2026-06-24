@@ -9,8 +9,8 @@ pokemon_battle_sim と damage_calculator_api の橋渡しユーティリティ
 
 from typing import Dict
 
-from src.pokemon_battle_sim.battle import Battle
-from src.pokemon_battle_sim.pokemon import Pokemon
+from pokepy.battle import Battle
+from pokepy.battle import Pokemon
 from src.damage_calculator_api.models.pokemon_models import (
     BattleConditions,
     PokemonState,

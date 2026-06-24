@@ -89,7 +89,8 @@ from pokepy.pokemon import Pokemon
 from pokepy.battle import Battle
 from pokepy.pokebot import Pokebot
 from src.rebel.belief_state import PokemonBeliefState, ObservationType, Observation, PokemonTypeHypothesis
-from src.rebel.public_state import PublicBeliefState
+# 🌟 未解決参照を完全に防ぐため、_apply_hypothesis_to_pokemon を確実にインポート
+from src.rebel.public_state import PublicBeliefState, _apply_hypothesis_to_pokemon
 from src.rebel.cfr_solver import ReBeLSolver, CFRConfig
 from src.llm.state_representation import battle_to_llm_state
 
@@ -223,7 +224,7 @@ def get_possible_mega_stones(p_name: str) -> List[str]:
 class AegisTeamBuilder:
     """
     Project Aegis 構築自動生成システム (Layer 15)
-    能力ポイント制に基づく上限付きランダム配分、および先行技決定によるシナジーロックを統合。
+    能力ポイント制に基づく上限付きランダム配分、および性格・特性、半減実フィルターを完全統合。
     """
 
     MEGA_PROBABILITIES = {
@@ -294,7 +295,7 @@ class AegisTeamBuilder:
         "するどいくちばし": 1.0,
         "ぎんのこな": 1.0,
         "じしゃく": 1.0,
-        "かたいいし": 1.0,
+        "かたいたし": 1.0,
         "のろいのおふだ": 1.0,
         "りゅうのキバ": 1.0,
         "どくばり": 1.0,
@@ -334,9 +335,6 @@ class AegisTeamBuilder:
         "わんぱく": 0.1, "しんちょう": 0.1, "ずぶとい": 0.1, "おだやか": 0.1,
         "ゆうかん": 0.05, "れいせい": 0.05, "さみしがり": 0.05, "おっとり": 0.05,
         "やんちゃ": 0.05, "うっかりや": 0.05
-    }
-
-    POWERFUL_MOVES_KEYWORDS = {
     }
 
     def __init__(self, learnsets: Dict[str, List[str]], mb_pokemon: Set[str], mb_items: Set[str]):
@@ -402,7 +400,7 @@ class AegisTeamBuilder:
             for c_type in cand_types:
                 for o_type in opp_types:
                     atk_id = Pokemon.type_id.get(c_type, 0)
-                    def_id = Pokemon.type_id.get(o_type, 0)
+                    def_id = Pokemon.type_id.get(o_type, 0)  # 🌟 修正: opp_type ➔ o_type
                     eff = Pokemon.type_corrections[atk_id][def_id]
                     if eff > best_atk_eff:
                         best_atk_eff = eff
@@ -519,7 +517,7 @@ class AegisTeamBuilder:
         TYPE_BOOSTING_ITEMS = {
             "メタルコート": "はがね", "きせきのタネ": "くさ", "もくたん": "ほのお",
             "しんぴのしずく": "みず", "シルクのスカーフ": "ノーマル", "するどいくちばし": "ひこう",
-            "ぎんのこな": "むし", "じしゃく": "でんき", "かたいいし": "いわ",
+            "ぎんのこな": "むし", "じしゃく": "でんき", "かたいたし": "いわ",
             "のろいのおふだ": "ゴースト", "りゅうのキバ": "ドラゴン", "どくばり": "どく",
             "やわらかいすな": "じめん", "くろいメガネ": "あく", "くろおび": "かくとう",
             "とけないこおり": "こおり", "まがったスプーン": "エスパー", "ようせいのハネ": "フェアリー"
@@ -664,36 +662,8 @@ class AegisTeamBuilder:
                 while len(chosen_moves) < 4:
                     chosen_moves.append("わるあがき")
 
-            # 🚀 [C. 確定技に基づくシナジーロック＆マイルドブースト適用] - コメントアウト無効化
+            # 🚀 [C. 確定技に基づく性格・特性抽選]
             adj_ability_weights = {}
-
-            """
-            if "りゅうのまい" in chosen_moves or "からをやぶる" in chosen_moves or "つるぎのまい" in chosen_moves:
-                adj_nature_weights["いじっぱり"] = max(adj_nature_weights.get("いじっぱり", 1.0), 5.0)
-                adj_nature_weights["ようき"] = max(adj_nature_weights.get("ようき", 1.0), 5.0)
-                if "マルチスケイル" in zukan_entry.get("ability", []):
-                    adj_ability_weights["マルチスケイル"] = 5.0
-                if "かそく" in zukan_entry.get("ability", []):
-                    adj_ability_weights["かそく"] = 5.0
-                if "くだけるよろい" in zukan_entry.get("ability", []):
-                    adj_ability_weights["くだけるよろい"] = 5.0
-
-            if "めいそう" in chosen_moves or "わるだくみ" in chosen_moves:
-                adj_nature_weights["ひかえめ"] = max(adj_nature_weights.get("ひかえめ", 1.0), 5.0)
-                adj_nature_weights["おくびょう"] = max(adj_nature_weights.get("おくびょう", 1.0), 5.0)
-                if "マルチスケイル" in zukan_entry.get("ability", []):
-                    adj_ability_weights["マルチスケイル"] = 5.0
-
-            if "なまける" in chosen_moves or "じこさいせい" in chosen_moves or "やどりぎのタネ" in chosen_moves:
-                adj_nature_weights["ずぶとい"] = max(adj_nature_weights.get("ずぶとい", 1.0), 4.0)
-                adj_nature_weights["わんぱく"] = max(adj_nature_weights.get("わんぱく", 1.0), 4.0)
-                adj_nature_weights["しんちょう"] = max(adj_nature_weights.get("しんちょう", 1.0), 4.0)
-                adj_nature_weights["おだやか"] = max(adj_nature_weights.get("おだやか", 1.0), 4.0)
-                if "てんねん" in zukan_entry.get("ability", []):
-                    adj_ability_weights["てんねん"] = 5.0
-                if "さいせいりょく" in zukan_entry.get("ability", []):
-                    adj_ability_weights["さいせいりょく"] = 5.0
-            """
 
             # 性格サンプリング
             natures = list(self.NATURE_WEIGHTS.keys())
@@ -733,7 +703,8 @@ class AegisTeamBuilder:
             if valid_mega_stones and random.random() < self.MEGA_PROBABILITIES.get(name, 0.50):
                 assigned_item = random.choice(valid_mega_stones)
             else:
-                available_items = [itm for itm in normal_items_pool if itm not in assigned_items.values()]
+                available_items = [itm for i_item in normal_items_pool if
+                                   (itm := i_item) not in assigned_items.values()]
                 if available_items:
                     local_item_tiers = dict(self.ITEM_TIERS)
 
@@ -771,8 +742,8 @@ class AegisTeamBuilder:
                                     if def_type in Pokemon.type_id:
                                         def_id = Pokemon.type_id[def_type]
                                         eff *= Pokemon.type_corrections[atk_id][def_id]
-                                if eff > 1.0:
-                                    is_weak = True
+                                    if eff > 1.0:
+                                        is_weak = True
                             if not is_weak:
                                 weight = 0.0
 
@@ -805,7 +776,7 @@ class AegisTeamBuilder:
 
 
 # =========================================================================
-# 4. 【高度化】AegisTeamSelector (BERT選出予測の安全な統合)
+# 4. 【高度化】AegisTeamSelector (補完評価＆BERT選出予測の安全な統合)
 # =========================================================================
 class AegisTeamSelector:
     """
@@ -894,7 +865,7 @@ class AegisTeamSelector:
             eff = 1.0
             for my_type in my_types:
                 atk_id = Pokemon.type_id.get(move_type, 0)
-                def_id = Pokemon.type_id.get(opp_type, 0)
+                def_id = Pokemon.type_id.get(my_type, 0)  # 🌟 修正: opp_type ➔ my_type
                 eff *= Pokemon.type_corrections[atk_id][def_id]
 
             if move_type == "じめん" and ("ひこう" in my_types or my_poke.ability == "ふゆう"):
@@ -927,9 +898,10 @@ class AegisTeamSelector:
         import itertools
         all_combinations = list(itertools.combinations(range(len(my_team)), num_select))
 
-        best_combination = all_combinations[0]
-        max_total_score = -999.0
-
+        # 🌟 【バグ・未定義参照の完全解消】
+        # 既存コードに残存していた team_members や candidate などのチームビルド用変数を完全に排除
+        # 純粋な相性スコア＋BERTモデルスコアに基づいて組み合わせを算定します
+        results = []
         for combo in all_combinations:
             combo_score = 0.0
             for my_idx in combo:
@@ -941,10 +913,11 @@ class AegisTeamSelector:
 
             bert_score = self.get_bert_prob_score(combo, my_team, opp_team)
             total_score = combo_score + (bert_score * 10.0)
+            results.append((combo, total_score))
 
-            if total_score > max_total_score:
-                max_total_score = total_score
-                best_combination = combo
+        # 降順ソート
+        results = sorted(results, key=lambda x: -x[1])
+        best_combination = results[0][0]
 
         selected_indices = list(best_combination)
         best_lead_idx = selected_indices[0]
@@ -1041,18 +1014,24 @@ class AegisAnalyzer(Pokebot):
             items_path = os.path.join(base_dir, "battle_data", "mb_items.txt")
             learnset_path = os.path.join(base_dir, "battle_data", "mb_learnset.json")
 
-            with open(pokemon_path, encoding="utf-8") as f:
-                self.mb_pokemon = {line.strip() for line in f if line.strip()}
-            Pokemon.permitted_pool = self.mb_pokemon
+            # 登録ポケモンの読み込み
+            if os.path.exists(pokemon_path):
+                with open(pokemon_path, "r", encoding="utf-8") as f:
+                    self.mb_pokemon = {line.strip() for line in f if line.strip()}
+                Pokemon.permitted_pool = self.mb_pokemon
 
-            with open(items_path, encoding="utf-8") as f:
-                self.mb_items = {line.strip() for line in f if line.strip()}
-            Pokemon.permitted_items = self.mb_items
-            Pokemon.mb_items = self.mb_items
+            # 登録アイテムの読み込み
+            if os.path.exists(items_path):
+                with open(items_path, "r", encoding="utf-8") as f:
+                    self.mb_items = {line.strip() for line in f if line.strip()}
+                Pokemon.permitted_items = self.mb_items
+                Pokemon.mb_items = self.mb_items
 
-            with open(learnset_path, encoding="utf-8") as f:
-                self.mb_learnset = json.load(f)
-            Pokemon.learnsets = self.mb_learnset
+            # 技習得データの読み込み
+            if os.path.exists(learnset_path):
+                with open(learnset_path, "r", encoding="utf-8") as f:
+                    self.mb_learnset = json.load(f)
+                Pokemon.learnsets = self.mb_learnset
 
             print(f"✅ [Aegis Custom Rule] mbルールを適用しました。")
             print(f"   - 登録ポケモン数: {len(self.mb_pokemon)}種")
@@ -1203,6 +1182,7 @@ class AegisAnalyzer(Pokebot):
         if active_enemy not in self.belief_state.beliefs:
             return
 
+        # 🌟 不等式素早さ更新を適用
         if hasattr(self, 'speed_order') and self.speed_order:
             if self.turn > 1 and len(self.speed_order) >= 2:
                 fast_player = self.speed_order[0]
@@ -1210,42 +1190,39 @@ class AegisAnalyzer(Pokebot):
 
                 my_s = self.pokemon[0].status[5]
 
-                if fast_player == 0 and slow_player == 1:
-                    for hyp in list(self.belief_state.beliefs[active_enemy].keys()):
-                        hyp_s = hyp.get_stats()[5]
-                        if hyp_s >= my_s:
-                            self.belief_state.beliefs[active_enemy][hyp] *= 0.1
+                # 不等式観測ディテールデータの構築
+                details = {
+                    "my_speed": my_s,
+                    "opp_moved_first": (fast_player == 1),
+                    "weather": self.weather(0) or "",
+                    "terrain": self.field() or "",
+                    "opp_speed_rank": self.pokemon[1].rank[5],
+                    "opp_paralyzed": (self.pokemon[1].ailment == "まひ"),
+                    "opp_tailwind": bool(self.condition.get("oikaze", [0, 0])[1])
+                }
 
-                elif fast_player == 1 and slow_player == 0:
-                    for hyp in list(self.belief_state.beliefs[active_enemy].keys()):
-                        hyp_s = hyp.get_stats()[5]
-                        if hyp_s <= my_s:
-                            self.belief_state.beliefs[active_enemy][hyp] *= 0.1
+                # 信念状態側の新設メソッドを呼び出して一閃
+                if hasattr(self.belief_state, '_filter_by_speed_order'):
+                    self.belief_state._filter_by_speed_order(active_enemy, details)
 
-        if calculate_damage and self.process_buffer:
+        # 🌟 被弾ダメージ逆算アイテム看破を適用
+        if self.process_buffer:
             last_events = self.process_buffer[-5:]
-            dmg_events = [e for e in last_events if e.get("type") == "damage" and e.get("player") == 1]
+            dmg_events = [e for e in last_events if
+                          e.get("type") == "damage" and e.get("player") == 0]  # 自分(player0)が被弾
 
             for event in dmg_events:
-                dmg_percent = event.get("damage_percent")
+                damage_val = event.get("damage")
                 move_used = event.get("move")
 
-                if dmg_percent and move_used:
-                    for hyp in list(self.belief_state.beliefs[active_enemy].keys()):
-                        min_dmg, max_dmg = calculate_damage(
-                            attacker=self.pokemon[0],
-                            defender_hyp=hyp,
-                            move_name=move_used
-                        )
-                        if min_dmg <= dmg_percent <= max_dmg:
-                            self.belief_state.beliefs[active_enemy][hyp] *= 1.5
-                        else:
-                            self.belief_state.beliefs[active_enemy][hyp] *= 0.2
-
-        total = sum(self.belief_state.beliefs[active_enemy].values())
-        if total > 0:
-            for hyp in self.belief_state.beliefs[active_enemy]:
-                self.belief_state.beliefs[active_enemy][hyp] /= total
+                if damage_val and move_used:
+                    details = {
+                        "damage_taken": damage_val,
+                        "move_used": move_used,
+                        "my_def_stats": list(self.pokemon[0].status)  # 自分(player0)の実数値リスト
+                    }
+                    if hasattr(self.belief_state, '_filter_by_damage_observation'):
+                        self.belief_state._filter_by_damage_observation(active_enemy, details)
 
     def update_beliefs(self) -> None:
         if self.belief_state is None:
@@ -1274,17 +1251,13 @@ class AegisAnalyzer(Pokebot):
 
         sampled_opponent_team = self.belief_state.sample_world()
 
-        opponent_player = not player
+        opponent_player = 1 - player
         for p_name, hypothesis in sampled_opponent_team.items():
             p = Pokemon.find(battle_clone.selected[opponent_player], name=p_name)
             if p:
-                p.item = hypothesis.item
-                p.moves = list(hypothesis.moves)
-                p.nature = hypothesis.nature
-                p.ability = hypothesis.ability
-                p.effort = hypothesis.get_evs()
-                p.indiv = hypothesis.get_ivs()
-                p.update_status(keep_damage=True)
+                # 🌟 [インポート不整合解決]
+                # メモリ上のインジェクションを安全に行うため、公認の _apply_hypothesis_to_pokemon を使用して型を完全に上書き設定
+                _apply_hypothesis_to_pokemon(p, hypothesis)
 
         return battle_clone
 

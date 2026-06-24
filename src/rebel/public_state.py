@@ -12,12 +12,12 @@ from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
 from src.hypothesis.selfplay import FieldCondition, PokemonState
-from src.pokemon_battle_sim.battle import Battle
+from pokepy.battle import Battle
 
 from .belief_state import PokemonBeliefState, PokemonTypeHypothesis
 
 if TYPE_CHECKING:
-    from src.pokemon_battle_sim.pokemon import Pokemon
+    from pokepy.battle import Pokemon
 
 
 def _extract_field_condition(battle: Battle) -> FieldCondition:

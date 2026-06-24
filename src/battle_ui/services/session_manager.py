@@ -7,8 +7,8 @@ from typing import Dict, List, Optional, Any
 import uuid
 from datetime import datetime
 
-from src.pokemon_battle_sim.battle import Battle
-from src.pokemon_battle_sim.pokemon import Pokemon
+from pokepy.battle import Battle
+from pokepy.pokemon import Pokemon
 
 
 @dataclass

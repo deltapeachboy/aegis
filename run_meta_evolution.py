@@ -8,9 +8,11 @@ import time
 import random
 import warnings
 import signal  # 🌟 タイムアウト強制遮断・パッチ用に追加
+import dataclasses
 from typing import Any, Optional, Dict, List, Tuple
 from copy import deepcopy
 from collections import Counter
+from pathlib import Path
 
 # =========================================================================
 # 0. 【File Path Redirect & Aegislash Data Patch (絶対位置対応版)】
@@ -73,6 +75,15 @@ from src.rebel.public_state import PublicBeliefState
 from train_value_network import train_model
 
 from src.rebel.value_network import ReBeLValueNetwork
+
+# 🌟 プラットフォームアラームの安全セーフガード
+HAS_ALARM = hasattr(signal, "alarm")
+
+
+def safe_set_alarm(seconds: int):
+    if HAS_ALARM:
+        signal.alarm(seconds)
+
 
 # =========================================================================
 # 🚀 [Aegis Reward Shaping Patch] 遅延報酬・特殊特性・逆転ギミック価値補正
@@ -195,7 +206,7 @@ def calculate_matchup_tactical_scores(cand_name: str, opp_name: str) -> Tuple[fl
         for o_type in opp_types:
             for c_type in cand_types:
                 atk_id = Pokemon.type_id.get(o_type, 0)
-                def_id = Pokemon.type_id.get(c_type, 0)
+                def_id = Pokemon.type_id.get(o_type, 0)
                 eff = Pokemon.type_corrections[atk_id][def_id]
                 if eff > best_def_eff:
                     best_def_eff = eff
@@ -532,7 +543,7 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
                 adj_nature_weights["ようき"] = 4.0
                 adj_nature_weights["おくびょう"] = 4.0
             elif "B" in chosen_pattern_name or "D" in chosen_pattern_name:
-                adj_nature_weights["ずぶとい"] = 4.0
+                adj_nature_weights["ずぶともい"] = 4.0
                 adj_nature_weights["わんぱく"] = 4.0
                 adj_nature_weights["しんちょう"] = 4.0
                 adj_nature_weights["おだやか"] = 4.0
@@ -883,7 +894,7 @@ def analyze_generation_meta(log_path: str) -> dict:
 # 5. 自己対戦解決処理
 # =========================================================================
 def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector: AegisTeamSelector, cfr_solver,
-                              analyzer, weights: dict, generation: int) -> dict:
+                              analyzer, weights: dict, generation: int, selection_predictor=None) -> dict:
     match_seed = int(time.time() * 1000) % 1000000
     battle = Battle(seed=match_seed)
 
@@ -892,6 +903,20 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
 
     battle.selected[0] = team_p0
     battle.selected[1] = team_p1
+
+    # 🌟 選出信念BERT予測器が存在する場合、CFR開始前の見せ合いフェーズで選出確率を予測し、お互いのターン1の信念状態の初期Prior重みに設定します
+    opp_bert_prob_p0 = None
+    opp_bert_prob_p1 = None
+    if selection_predictor is not None:
+        try:
+            team_p0_names = [p.name for p in team_p0]
+            team_p1_names = [p.name for p in team_p1]
+            # 自分のチームと相手のチームから選出をBERTで予測
+            p0_pred, p1_pred = selection_predictor.predict(team_p0_names, team_p1_names)
+            opp_bert_prob_p0 = p1_pred  # Player0から見たPlayer1（相手）の選出予測
+            opp_bert_prob_p1 = p0_pred  # Player1から見たPlayer0（相手）の選出予測
+        except Exception as e:
+            print(f"⚠️ [Aegis BERT] 選出予測の事前取得に失敗しました(フラット信念で補填します): {e}")
 
     sel_p0 = selector.select(team_p0, team_p1, num_select=3)
     sel_p1 = selector.select(team_p1, team_p0, num_select=3)
@@ -915,8 +940,32 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
         beliefs[pl].revealed_tera = {name: None for name in opp_names}
         beliefs[pl].move_use_count = {name: {} for name in opp_names}
         beliefs[pl].beliefs = {}
+
+        # BERTの選出確率予測を適用
+        active_bert_prob = opp_bert_prob_p0 if pl == 0 else opp_bert_prob_p1
+
         for name in opp_names:
-            beliefs[pl].beliefs[name] = analyzer._build_flat_belief(name)
+            flat_belief = analyzer._build_flat_belief(name)
+
+            # 🌟 もしBERTの選出期待確率が存在する場合、初期の型仮説（期待度）の重みとしてスケールさせます（ターン1からのメタ読み）
+            if active_bert_prob is not None:
+                try:
+                    opp_idx = opp_names.index(name)
+                    weight_factor = max(0.01, active_bert_prob.selection_probs[opp_idx])
+                except ValueError:
+                    weight_factor = 1.0
+
+                weighted_belief = {}
+                for h, p in flat_belief.items():
+                    weighted_belief[h] = p * weight_factor
+
+                total_p = sum(weighted_belief.values())
+                if total_p > 0:
+                    beliefs[pl].beliefs[name] = {h: p / total_p for h, p in weighted_belief.items()}
+                else:
+                    beliefs[pl].beliefs[name] = flat_belief
+            else:
+                beliefs[pl].beliefs[name] = flat_belief
 
     # 🌟 [追加] 前の対戦や初期値によるコマンドの残存（0等）をリセットし、command - 20 のインデックス暴走を完全に防ぐ
     battle.command = [None, None]
@@ -953,8 +1002,7 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
 
             # 🌟 [タイムアウト守護神] 5秒ルールを適用。これを超えた場合は、ハング防止のためランダムコマンドへ安全フォールバックします。
             my_strategy = None
-            if hasattr(signal, "SIGALRM"):
-                signal.alarm(5)  # 5秒タイマースタート
+            safe_set_alarm(5)  # 5秒タイマースタート
 
             try:
                 my_strategy, _ = cfr_solver.solve(pbs, battle)
@@ -963,8 +1011,7 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
                     f"⚠️ [Timeout Guardian] ターン {battle.turn} (プレイヤー {pl}) のCFR計算が5秒を超過したため、ハング防止目的で一時的に遮断してランダム手へフォールバックします。")
                 my_strategy = None
             finally:
-                if hasattr(signal, "SIGALRM"):
-                    signal.alarm(0)  # タイマークリア
+                safe_set_alarm(0)  # タイマークリア
 
             if my_strategy:
                 # 🌟 [追加] 生数値を合計1.0(100%)になる本物の確率に正規化する
@@ -1067,6 +1114,15 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
     selector = analyzer.team_selector
     cfr_solver = analyzer.cfr_solver
 
+    # 🌟 [BERT選出信念予測器のロード]
+    try:
+        from src.selection_bert.selection_belief import SelectionBeliefPredictor
+        selection_predictor = SelectionBeliefPredictor.load(Path("log/selection_bert"))
+        print("ℹ️ [Aegis BERT] Pretrained team selection predictor loaded successfully.")
+    except Exception as e:
+        selection_predictor = None
+        print(f"ℹ️ [Aegis BERT] Pretrained selection predictor not found or failed to load: {e}")
+
     pokemon_weights = {}
     weights_path = "log/meta_weights.json"
 
@@ -1124,7 +1180,8 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
                         cfr_solver=cfr_solver,
                         analyzer=analyzer,
                         weights=pokemon_weights,
-                        generation=gen
+                        generation=gen,
+                        selection_predictor=selection_predictor  # 🌟 パラメータを追加
                     )
                     f_out.write(json.dumps(match_data, ensure_ascii=False) + "\n")
                     f_out.flush()  # 🌟 即時書き出しを強制して中断時のデータ破損（0バイト）を完全防止
@@ -1253,6 +1310,7 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
 
     print(f"\n🏁 {total_generations}世代すべての進化学習サイクルが正常に完了しました。")
 
+
 # =========================================================================
 # 7. エントリーポイント
 # =========================================================================
@@ -1334,7 +1392,8 @@ if __name__ == "__main__":
 
 
     Battle.change_pokemon = patched_change_pokemon
-    print("ℹ️ [Aegis Patch] Battle.change_pokemon インデックスエラー安全防止パッチ(引数マッピング修正済)を適用しました。")
+    print(
+        "ℹ️ [Aegis Patch] Battle.change_pokemon インデックスエラー安全防止パッチ(引数マッピング修正済)を適用しました。")
 
 
     # =========================================================================
@@ -1446,7 +1505,6 @@ if __name__ == "__main__":
     Pokemon.__deepcopy__ = patched_pokemon_deepcopy
     print("ℹ️ [Aegis Patch] Battle and Pokemon customized __deepcopy__ optimization applied.")
 
-
     # =========================================================================
     # 🌟 【修正版】Battle.available_commands テラスタルコマンド（40-43）除外パッチ
     # =========================================================================
@@ -1466,7 +1524,6 @@ if __name__ == "__main__":
     Battle.available_commands = patched_available_commands
     print("ℹ️ [Aegis Patch] Battle.available_commands テラスタル排除パッチ(引数マッピング互換)を適用しました。")
 
-
     # =========================================================================
     # 🌟 【新規追加：Battle.battle_command 内部ランダムエラー防止パッチ】
     # =========================================================================
@@ -1485,7 +1542,6 @@ if __name__ == "__main__":
 
     Battle.battle_command = patched_battle_command
     print("ℹ️ [Aegis Patch] Battle.battle_command 内部安全パッチを適用しました。")
-
 
     # =========================================================================
     # 🌟 【その他補正パッチ群】

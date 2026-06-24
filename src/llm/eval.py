@@ -11,8 +11,8 @@ from typing import Callable, Dict, List, Tuple
 
 from src.llm.policy import LLMPolicy
 from src.llm.selfplay_rl import action_to_command
-from src.pokemon_battle_sim.battle import Battle
-from src.pokemon_battle_sim.pokemon import Pokemon
+from pokepy.battle import Battle
+from pokepy.battle import Pokemon
 
 
 def _total_hp_ratio(party: List[Pokemon]) -> float:

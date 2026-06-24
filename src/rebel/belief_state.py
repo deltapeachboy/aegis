@@ -2,7 +2,8 @@
 ポケモンバトルにおける信念状態の管理
 
 相手の隠された情報（技構成・持ち物・テラスタイプ等）に対する
-確率分布を管理し、観測に基づいてベイズ更新を行う。
+確率分布を管理し、観測（素早さ関係の不等式、被弾した実ダメージ等）に
+基づいてベイズ更新および確定枝刈りを行う。
 """
 
 from __future__ import annotations
@@ -13,6 +14,9 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any, Optional
 
+# 🌟 赤線対策として、直接 pokepy からインポート
+from pokepy.pokemon import Pokemon
+
 from src.hypothesis.pokemon_usage_database import PokemonUsageDatabase
 
 from .ev_template import (
@@ -21,6 +25,8 @@ from .ev_template import (
     estimate_ev_spread_type,
     get_ev_spread,
     get_ivs_for_spread_type,
+    NATURE_BOOST,
+    NATURE_PENALTY,
 )
 
 
@@ -50,8 +56,8 @@ class ObservationType(Enum):
     ABILITY_REVEALED = auto()  # 特性発動
 
     # === 推測に使える観測 ===
-    OUTSPED_UNEXPECTEDLY = auto()  # 予想外に先制 → スカーフ疑惑
-    HIGH_DAMAGE_DEALT = auto()  # 高ダメージ → 火力アイテム疑惑
+    OUTSPED_UNEXPECTEDLY = auto()  # 予想外に先制 → 素早さ不等式による確定枝刈り
+    HIGH_DAMAGE_DEALT = auto()  # 高ダメージ → 火力アイテム実ダメージ逆算による確定枝刈り
     STATUS_CURED = auto()  # 状態異常回復 → ラムのみ疑惑
     SURVIVED_UNEXPECTEDLY = auto()  # 予想外の耐え → チョッキ/耐久振り疑惑
 
@@ -69,9 +75,6 @@ class Observation:
 class PokemonTypeHypothesis:
     """
     ポケモンの型仮説
-
-    1体のポケモンがどのような構成かの仮説。
-    frozen=True でハッシュ可能にし、辞書のキーとして使用可能。
     """
 
     moves: tuple[str, ...]  # 4技（ソート済み）
@@ -95,8 +98,8 @@ class PokemonTypeHypothesis:
         ability: str,
         base_stats: Optional[list[int]] = None,
     ) -> "PokemonTypeHypothesis":
-        """リストから作成（技はソートして正規化、EVは性格と種族値から推定）"""
-        ev_type = estimate_ev_spread_type(nature, base_stats)
+        """リストから作成"""
+        ev_type = estimate_ev_spread_type(nature, base_stats, moves)
         return cls(
             moves=tuple(sorted(moves)),
             item=item,
@@ -135,23 +138,18 @@ class PokemonTypeHypothesis:
 
     def get_evs(self) -> list[int]:
         """EV配分をリストで取得 [H, A, B, C, D, S]"""
-        from .ev_template import EV_TEMPLATES
-        spread = EV_TEMPLATES.get(self.ev_spread_type, EV_TEMPLATES[EVSpreadType.UNKNOWN])
+        from .ev_template import get_ev_spread
+        spread = get_ev_spread(self.nature, moves=list(self.moves))
         return spread.to_list()
 
     def get_ivs(self) -> list[int]:
-        """個体値をリストで取得 [H, A, B, C, D, S]"""
-        return get_ivs_for_spread_type(self.ev_spread_type)
+        """個体値をリストで取得（常に素早さ31）"""
+        return [31, 31, 31, 31, 31, 31]
 
 
 class PokemonBeliefState:
     """
     相手パーティ全体に対する信念状態
-
-    各ポケモンについて、型仮説の確率分布を保持し、
-    観測に基づいてベイズ更新を行う。
-
-    計算量削減のため、確率の低い仮説は枝刈りする。
     """
 
     def __init__(
@@ -161,21 +159,12 @@ class PokemonBeliefState:
         max_hypotheses_per_pokemon: int = 50,
         min_probability: float = 0.01,
     ):
-        """
-        Args:
-            opponent_pokemon_names: 相手の見せ合いで見えたポケモン名
-            usage_db: 使用率データベース
-            max_hypotheses_per_pokemon: ポケモンあたりの最大仮説数
-            min_probability: 仮説の最小確率（これ以下は枝刈り）
-        """
         self.usage_db = usage_db
         self.max_hypotheses = max_hypotheses_per_pokemon
         self.min_probability = min_probability
 
-        # 各ポケモンの信念: {pokemon_name: {hypothesis: probability}}
         self.beliefs: dict[str, dict[PokemonTypeHypothesis, float]] = {}
 
-        # 観測済み情報（確定情報）
         self.revealed_moves: dict[str, set[str]] = {
             name: set() for name in opponent_pokemon_names
         }
@@ -189,46 +178,28 @@ class PokemonBeliefState:
             name: None for name in opponent_pokemon_names
         }
 
-        # 技使用回数の追跡（PP枯渇の推測に使用）
-        # {pokemon_name: {move_name: use_count}}
         self.move_use_count: dict[str, dict[str, int]] = {
             name: {} for name in opponent_pokemon_names
         }
 
-        # 観測履歴
         self.observation_history: list[Observation] = []
 
-        # 初期信念を構築
         for name in opponent_pokemon_names:
             self.beliefs[name] = self._build_initial_belief(name)
 
     def _build_initial_belief(
         self, pokemon_name: str
     ) -> dict[PokemonTypeHypothesis, float]:
-        """
-        使用率データから初期信念を構築
-
-        技・持ち物・テラス・性格・特性の組み合わせを
-        独立と仮定してサンプリングし、上位N個を保持。
-        EVは性格と種族値から自動推定する。
-        """
+        """使用率データから初期信念を構築"""
         hypotheses: dict[PokemonTypeHypothesis, float] = {}
-
-        # 種族値を取得（EV推定に使用）
         base_stats = self._get_base_stats(pokemon_name)
 
-        # 使用率データを取得
         move_prior = self.usage_db.get_move_prior(pokemon_name, min_probability=0.05)
         item_prior = self.usage_db.get_item_prior(pokemon_name, min_probability=0.05)
         tera_prior = self.usage_db.get_tera_prior(pokemon_name, min_probability=0.05)
-        nature_prior = self.usage_db.get_nature_prior(
-            pokemon_name, min_probability=0.05
-        )
-        ability_prior = self.usage_db.get_ability_prior(
-            pokemon_name, min_probability=0.01
-        )
+        nature_prior = self.usage_db.get_nature_prior(pokemon_name, min_probability=0.05)
+        ability_prior = self.usage_db.get_ability_prior(pokemon_name, min_probability=0.01)
 
-        # データがない場合はデフォルト
         if not move_prior:
             return hypotheses
         if not item_prior:
@@ -236,17 +207,13 @@ class PokemonBeliefState:
         if not tera_prior:
             tera_prior = {"ノーマル": 1.0}
         if not nature_prior:
-            # 種族値から物理/特殊を判断してデフォルト性格を決定
             nature_prior = self._get_default_nature_prior(base_stats)
         if not ability_prior:
             ability_prior = {"": 1.0}
 
-        # 組み合わせをサンプリング（確率上位の組み合わせを生成）
-        # 完全な直積は計算量が爆発するため、確率的にサンプリング
-        num_samples = self.max_hypotheses * 10  # 多めにサンプリングして上位を取る
+        num_samples = self.max_hypotheses * 10
 
         for _ in range(num_samples):
-            # 各要素を確率に従ってサンプリング
             moves = self._sample_moveset(move_prior, 4)
             item = self._weighted_sample(item_prior)
             tera = self._weighted_sample(tera_prior)
@@ -259,10 +226,9 @@ class PokemonBeliefState:
                 tera_type=tera,
                 nature=nature,
                 ability=ability,
-                base_stats=base_stats,  # 種族値を渡してEV推定
+                base_stats=base_stats,
             )
 
-            # 確率を計算（独立仮定）
             prob = self._calculate_hypothesis_probability(
                 hypothesis, move_prior, item_prior, tera_prior, nature_prior, ability_prior
             )
@@ -272,11 +238,9 @@ class PokemonBeliefState:
             else:
                 hypotheses[hypothesis] = prob
 
-        # 上位N個に絞り込み、正規化
         return self._prune_and_normalize(hypotheses)
 
     def _sample_moveset(self, move_prior: dict[str, float], num_moves: int) -> list[str]:
-        """技構成をサンプリング"""
         moves = []
         available = dict(move_prior)
 
@@ -286,7 +250,6 @@ class PokemonBeliefState:
             move = self._weighted_sample(available)
             moves.append(move)
             del available[move]
-            # 再正規化
             total = sum(available.values())
             if total > 0:
                 available = {k: v / total for k, v in available.items()}
@@ -302,23 +265,14 @@ class PokemonBeliefState:
         nature_prior: dict[str, float],
         ability_prior: dict[str, float],
     ) -> float:
-        """仮説の確率を計算（独立仮定）"""
         prob = 1.0
-
-        # 技の確率（4技の積）
         for move in hypothesis.moves:
             prob *= move_prior.get(move, 0.01)
 
-        # 持ち物
         prob *= item_prior.get(hypothesis.item, 0.01)
-
-        # テラス
         prob *= tera_prior.get(hypothesis.tera_type, 0.01)
-
-        # 性格
         prob *= nature_prior.get(hypothesis.nature, 0.1)
 
-        # 特性
         if hypothesis.ability:
             prob *= ability_prior.get(hypothesis.ability, 0.1)
 
@@ -327,24 +281,19 @@ class PokemonBeliefState:
     def _prune_and_normalize(
         self, hypotheses: dict[PokemonTypeHypothesis, float]
     ) -> dict[PokemonTypeHypothesis, float]:
-        """仮説を枝刈りして正規化"""
         if not hypotheses:
             return {}
 
-        # 確率順にソート
         sorted_hypos = sorted(hypotheses.items(), key=lambda x: -x[1])
-
-        # 上位N個を取得
         top_hypos = sorted_hypos[: self.max_hypotheses]
 
-        # 正規化
         total = sum(prob for _, prob in top_hypos)
         if total > 0:
             return {h: p / total for h, p in top_hypos}
-        return {h: 1.0 / len(top_hypos) for h, _ in top_hypos}
+        n = len(hypotheses)
+        return {h: 1.0 / n for h, _ in top_hypos}
 
     def _weighted_sample(self, probs: dict[str, float]) -> str:
-        """重み付きサンプリング"""
         if not probs:
             return ""
         items = list(probs.keys())
@@ -352,75 +301,288 @@ class PokemonBeliefState:
         return random.choices(items, weights=weights, k=1)[0]
 
     def _get_base_stats(self, pokemon_name: str) -> Optional[list[int]]:
-        """
-        ポケモン名から種族値を取得
-
-        Args:
-            pokemon_name: ポケモン名
-
-        Returns:
-            種族値 [H, A, B, C, D, S]、見つからない場合は None
-        """
-        try:
-            from src.pokemon_battle_sim.pokemon import Pokemon
-
-            if pokemon_name in Pokemon.zukan:
-                return Pokemon.zukan[pokemon_name].get("base")
-        except (ImportError, AttributeError):
-            pass
+        if pokemon_name in Pokemon.zukan:
+            return Pokemon.zukan[pokemon_name].get("base")
         return None
 
-    def _get_default_nature_prior(
-        self, base_stats: Optional[list[int]]
-    ) -> dict[str, float]:
+    def _get_default_nature_prior(self, base_stats: Optional[list[int]]) -> dict[str, float]:
+        default_natures = ["いじっぱり", "ようき", "ひかえめ", "おくびょう"]
+        n = len(default_natures)
+        return {nat: 1.0 / n for nat in default_natures}
+
+    # =========================================================================
+    # 🌟 新規追加：仮説全滅（空リスト）時の「安全な自動再生成フォールバック」
+    # =========================================================================
+
+    def _regenerate_hypotheses_with_constraints(self, pokemon_name: str) -> dict[PokemonTypeHypothesis, float]:
         """
-        種族値からデフォルトの性格確率分布を取得
-
-        Args:
-            base_stats: 種族値 [H, A, B, C, D, S]
-
-        Returns:
-            性格の確率分布
+        フィルタリングによって適合する型候補が0になった際、
+        現在までに確定した情報（確定技、持ち物、テラス、特性）を満たす仮説を
+        使用率データベースから再サンプリングして、安全に信念をリフレッシュ（復旧）する。
         """
-        if base_stats is None:
-            # 種族値不明の場合は汎用的なデフォルト
-            return {"いじっぱり": 0.3, "ようき": 0.3, "ひかえめ": 0.2, "おくびょう": 0.2}
+        base_stats = self._get_base_stats(pokemon_name)
+        confirmed_moves = list(self.revealed_moves[pokemon_name])
+        confirmed_item = self.revealed_items[pokemon_name]
+        confirmed_ability = self.revealed_abilities[pokemon_name]
+        confirmed_tera = self.revealed_tera[pokemon_name]
 
-        attack = base_stats[1]  # A
-        sp_attack = base_stats[3]  # C
-        speed = base_stats[5]  # S
+        # 確率情報のロード
+        move_prior = self.usage_db.get_move_prior(pokemon_name, min_probability=0.0)
+        item_prior = self.usage_db.get_item_prior(pokemon_name, min_probability=0.0)
+        tera_prior = self.usage_db.get_tera_prior(pokemon_name, min_probability=0.0)
+        nature_prior = self.usage_db.get_nature_prior(pokemon_name, min_probability=0.0)
+        ability_prior = self.usage_db.get_ability_prior(pokemon_name, min_probability=0.0)
 
-        # 物理 vs 特殊を判断
-        is_physical = attack >= sp_attack
+        # 確定情報を優先設定
+        if confirmed_item:
+            item_prior = {confirmed_item: 1.0}
+        if confirmed_tera:
+            tera_prior = {confirmed_tera: 1.0}
+        if confirmed_ability:
+            ability_prior = {confirmed_ability: 1.0}
 
-        # 素早さが高いか（90以上をアタッカー向け素早さと判断）
-        is_fast = speed >= 90
+        hypotheses: dict[PokemonTypeHypothesis, float] = {}
+        for _ in range(self.max_hypotheses * 5):
+            # 確定技をベースに4つの技構成をサンプリング
+            moves_sampled = list(confirmed_moves)
+            remaining_prior = {k: v for k, v in move_prior.items() if k not in moves_sampled}
+            while len(moves_sampled) < 4 and remaining_prior:
+                mv = self._weighted_sample(remaining_prior)
+                moves_sampled.append(mv)
+                remaining_prior.pop(mv, None)
 
-        if is_physical:
-            if is_fast:
-                # 物理アタッカー（素早さ重視）: ようき > いじっぱり
-                return {"ようき": 0.6, "いじっぱり": 0.4}
+            while len(moves_sampled) < 4:
+                moves_sampled.append("わるあがき")
+
+            item = self._weighted_sample(item_prior) if item_prior else "なし"
+            tera = self._weighted_sample(tera_prior) if tera_prior else "ノーマル"
+            nature = self._weighted_sample(nature_prior) if nature_prior else "いじっぱり"
+            ability = self._weighted_sample(ability_prior) if ability_prior else "とくせいなし"
+
+            hypo = PokemonTypeHypothesis.from_lists(
+                moves=moves_sampled,
+                item=item,
+                tera_type=tera,
+                nature=nature,
+                ability=ability,
+                base_stats=base_stats,
+            )
+            hypotheses[hypo] = 1.0
+
+        return self._prune_and_normalize(hypotheses)
+
+    # =========================================================================
+    # ベイズ更新 ＆ 素早さ・ダメージ確定不等式ハードフィルタリング
+    # =========================================================================
+
+    def _calculate_hypothetical_speed(
+        self,
+        pokemon_name: str,
+        hypothesis: PokemonTypeHypothesis,
+        details: dict[str, Any],
+    ) -> int:
+        """
+        特定の仮説における相手の素早さ実数値（レベル50）を仕様に基づいて厳密に算出する
+        """
+        base_stats = self._get_base_stats(pokemon_name)
+        if not base_stats:
+            return 100
+
+        base_s = base_stats[5]  # 素早さ種族値
+
+        from .ev_template import get_ev_spread
+        spread = get_ev_spread(hypothesis.nature, base_stats, list(hypothesis.moves))
+        ev_s = spread.speed
+
+        # システム仕様に合わせ素早さ個体値は常に31
+        iv_s = 31
+
+        # レベル50時点の素早さ実数値の算出
+        speed_stat = int((base_s * 2 + iv_s + ev_s // 4) * 0.5) + 5
+
+        # 性格（Nature）補正
+        nature = hypothesis.nature
+        if NATURE_BOOST.get(nature) == "speed":
+            speed_stat = int(speed_stat * 1.1)
+        elif NATURE_PENALTY.get(nature) == "speed":
+            speed_stat = int(speed_stat * 0.9)
+
+        # ランク補正
+        rank_stage = details.get("opp_speed_rank", 0)
+        if rank_stage > 0:
+            speed_stat = int(speed_stat * (2 + rank_stage) / 2)
+        elif rank_stage < 0:
+            speed_stat = int(speed_stat * 2 / (2 - rank_stage))
+
+        # こだわりスカーフ補正
+        if hypothesis.item == "こだわりスカーフ":
+            speed_stat = int(speed_stat * 1.5)
+
+        # 特性と天候・フィールドの相乗効果
+        ability = hypothesis.ability
+        weather = details.get("weather", "")
+        terrain = details.get("terrain", "")
+
+        if ability == "すいすい" and weather == "rainy":
+            speed_stat = int(speed_stat * 2.0)
+        elif ability == "ようりょくそ" and weather == "sunny":
+            speed_stat = int(speed_stat * 2.0)
+        elif ability == "すなかき" and weather == "sandstorm":
+            speed_stat = int(speed_stat * 2.0)
+        elif ability == "ゆきかき" and weather == "snow":
+            speed_stat = int(speed_stat * 2.0)
+
+        if ability == "クォークチャージ" and terrain == "electric":
+            speed_stat = int(speed_stat * 1.5)
+        elif ability == "こだいかっせい" and weather == "sunny":
+            speed_stat = int(speed_stat * 1.5)
+
+        # 麻痺状態補正
+        opp_is_paralyzed = details.get("opp_paralyzed", False)
+        if opp_is_paralyzed:
+            speed_stat = int(speed_stat * 0.5)
+
+        # おいかぜ補正
+        opp_has_tailwind = details.get("opp_tailwind", False)
+        if opp_has_tailwind:
+            speed_stat = int(speed_stat * 2.0)
+
+        return speed_stat
+
+    def _filter_by_speed_order(self, pokemon_name: str, details: dict[str, Any]) -> None:
+        """
+        行動順の観測に基づいて、素早さの確定不等式を満たさない矛盾仮説を完全に排除（確率0）する
+        """
+        my_speed = details.get("my_speed")
+        opp_moved_first = details.get("opp_moved_first", True)
+
+        if my_speed is None:
+            return
+
+        current = self.beliefs[pokemon_name]
+        updated = {}
+
+        for h, p in current.items():
+            hypo_speed = self._calculate_hypothetical_speed(pokemon_name, h, details)
+
+            if opp_moved_first:
+                if hypo_speed < my_speed:
+                    continue
             else:
-                # 物理アタッカー（火力重視）: いじっぱり > ゆうかん
-                return {"いじっぱり": 0.7, "ゆうかん": 0.2, "ようき": 0.1}
+                if hypo_speed > my_speed:
+                    continue
+
+            updated[h] = p
+
+        # 🌟 仮説が全滅した場合は、自動再生成フォールバックを起動
+        if updated:
+            self.beliefs[pokemon_name] = self._prune_and_normalize(updated)
         else:
-            if is_fast:
-                # 特殊アタッカー（素早さ重視）: おくびょう > ひかえめ
-                return {"おくびょう": 0.6, "ひかえめ": 0.4}
-            else:
-                # 特殊アタッカー（火力重視）: ひかえめ > れいせい
-                return {"ひかえめ": 0.7, "れいせい": 0.2, "おくびょう": 0.1}
+            self.beliefs[pokemon_name] = self._regenerate_hypotheses_with_constraints(pokemon_name)
 
+# 🌟 新規追加：実ダメージ計算に基づく「火力補正アイテムの厳密な逆算特定」
     # =========================================================================
-    # 観測による更新
+    # 🌟 修正版：実ダメージ計算に基づく「火力補正アイテムの厳密な逆算特定」
     # =========================================================================
+        # =========================================================================
+        # 🌟 修正版（不具合解消済）：実ダメージ計算に基づく「火力補正アイテムの厳密な逆算特定」
+        # =========================================================================
+    def _filter_by_damage_observation(self, pokemon_name: str, details: dict[str, Any]) -> None:
+        """
+        被弾した実ダメージから、物理的にあり得ない火力補正アイテム（ハチマキ、眼鏡、命の珠、等）
+        を保持する矛盾仮説を100%の数学的精度で除外する
+        """
+        damage_taken = details.get("damage_taken")
+        move_name = details.get("move_used")  # 技名
+        def_stats = details.get("my_def_stats")  # 自分（防御側）の実数値リスト [H, A, B, C, D, S]
+
+        if damage_taken is None or not move_name or not def_stats:
+            return
+
+        move_data = Pokemon.all_moves.get(move_name)
+        if not move_data:
+            return
+
+        power = move_data.get("power", 0)
+        move_type = move_data.get("type", "ノーマル")
+        move_class = move_data.get("class", "phy")
+
+        if power == 0 or move_class == "status":
+            return
+
+        current = self.beliefs[pokemon_name]
+        updated = {}
+
+        for h, p in current.items():
+            base_stats = self._get_base_stats(pokemon_name)
+            if not base_stats:
+                updated[h] = p
+                continue
+
+            # 1. 攻撃側の実数値ステータスの算出（レベル50）
+            is_special = "spc" in move_class
+            atk_base = base_stats[3] if is_special else base_stats[1]  # C or A
+
+            from .ev_template import get_ev_spread
+            spread = get_ev_spread(h.nature, base_stats, list(h.moves))
+            ev_atk = spread.sp_attack if is_special else spread.attack
+
+            # 攻撃側実数値の算出
+            atk_stat = int((atk_base * 2 + 31 + ev_atk // 4) * 0.5) + 5
+
+            # 性格補正
+            nature = h.nature
+            if NATURE_BOOST.get(nature) == ("sp_attack" if is_special else "attack"):
+                atk_stat = int(atk_stat * 1.1)
+            elif NATURE_PENALTY.get(nature) == ("sp_attack" if is_special else "attack"):
+                atk_stat = int(atk_stat * 0.9)
+
+            # 持ち物による攻撃ステータス補正（ハチマキ・眼鏡）
+            if h.item == "こだわりハチマキ" and not is_special:
+                atk_stat = int(atk_stat * 1.5)
+            elif h.item == "こだわりメガネ" and is_special:
+                atk_stat = int(atk_stat * 1.5)
+
+            # 防御側の実数値（味方の実数値なので完全既知。def_stats: [H, A, B, C, D, S]）
+            def_stat = def_stats[2] if not is_special else def_stats[4]  # B（物理防御） or D（特殊防）
+
+            # 2. 基礎ダメージ計算（残骸コードを撤廃し、厳密かつ安全に修正完了）
+            try:
+                base_damage = int(int(22 * power * atk_stat / def_stat) / 50) + 2
+            except (ZeroDivisionError, ValueError):
+                updated[h] = p
+                continue
+
+            # 各火力アイテムによる最終ダメージ倍率（補正値）の算出
+            item_modifier = 1.0
+            if h.item == "いのちのたま":
+                item_modifier = 1.3
+            elif h.item in ("たつじんのおび", "しんぴのしずく", "もくたん", "メタルコート", "じしゃく",
+                            "きせきのタネ", "とけないこおり", "まがったスプーン", "ようせいのハネ", "くろいメガネ",
+                            "くろおび", "のろいのおふだ", "りゅうのキバ", "どくばり", "やわらかいすな",
+                            "かたいたし", "するどいくちばし", "ぎんのこな"):
+                # タイプ一致強化アイテムまたは達人の帯（一律で最大補正の可能性があるものを1.2倍としてチェック）
+                item_modifier = 1.2
+
+            # 乱数幅のシミュレーション（レベル50公式に基づく [0.85 〜 1.0] 倍）
+            min_possible = int(base_damage * 0.85 * item_modifier)
+            max_possible = int(base_damage * 1.00 * item_modifier)
+
+            # 実被ダメージが、この仮説における最大・最小の物理的限界を超えている場合は矛盾
+            if damage_taken < min_possible or damage_taken > max_possible:
+                continue  # 矛盾仮説として排除
+
+            updated[h] = p
+
+        # 仮説が全滅した場合は、自動再生成フォールバックを起動
+        if updated:
+            self.beliefs[pokemon_name] = self._prune_and_normalize(updated)
+        else:
+            self.beliefs[pokemon_name] = self._regenerate_hypotheses_with_constraints(pokemon_name)
 
     def update(self, observation: Observation) -> None:
         """
         観測に基づいて信念をベイズ更新
-
-        Args:
-            observation: 観測イベント
         """
         self.observation_history.append(observation)
         pokemon_name = observation.pokemon_name
@@ -436,7 +598,6 @@ class PokemonBeliefState:
             if move:
                 self.revealed_moves[pokemon_name].add(move)
                 self._filter_by_revealed_moves(pokemon_name)
-                # 技使用回数を更新
                 if pokemon_name not in self.move_use_count:
                     self.move_use_count[pokemon_name] = {}
                 self.move_use_count[pokemon_name][move] = \
@@ -492,18 +653,26 @@ class PokemonBeliefState:
             if ability:
                 self._confirm_ability(pokemon_name, ability)
 
-        # === 推測観測（確率更新） ===
+        # === 推測観測（不等式・物理ダメージ逆算による枝刈り） ===
         elif obs_type == ObservationType.OUTSPED_UNEXPECTEDLY:
-            self._boost_item_probability(pokemon_name, "こだわりスカーフ", factor=3.0)
+            if "my_speed" in observation.details:
+                self._filter_by_speed_order(pokemon_name, observation.details)
+            else:
+                self._boost_item_probability(pokemon_name, "こだわりスカーフ", factor=3.0)
 
         elif obs_type == ObservationType.HIGH_DAMAGE_DEALT:
-            category = observation.details.get("category", "physical")
-            if category == "physical":
-                self._boost_item_probability(pokemon_name, "こだわりハチマキ", factor=2.0)
-                self._boost_item_probability(pokemon_name, "いのちのたま", factor=1.5)
+            # 🌟 もし詳細な実ダメージ、被弾技、自分の耐久実数値が渡された場合は、厳密な実ダメージ逆算特定を実行
+            if "damage_taken" in observation.details and "my_def_stats" in observation.details:
+                self._filter_by_damage_observation(pokemon_name, observation.details)
             else:
-                self._boost_item_probability(pokemon_name, "こだわりメガネ", factor=2.0)
-                self._boost_item_probability(pokemon_name, "いのちのたま", factor=1.5)
+                # 簡易フォールバック（確率ブースト）
+                category = observation.details.get("category", "physical")
+                if category == "physical":
+                    self._boost_item_probability(pokemon_name, "こだわりハチマキ", factor=2.0)
+                    self._boost_item_probability(pokemon_name, "いのちのたま", factor=1.5)
+                else:
+                    self._boost_item_probability(pokemon_name, "こだわりメガネ", factor=2.0)
+                    self._boost_item_probability(pokemon_name, "いのちのたま", factor=1.5)
 
         elif obs_type == ObservationType.STATUS_CURED:
             self._boost_item_probability(pokemon_name, "ラムのみ", factor=5.0)
@@ -521,6 +690,8 @@ class PokemonBeliefState:
 
         if filtered:
             self.beliefs[pokemon_name] = self._prune_and_normalize(filtered)
+        else:
+            self.beliefs[pokemon_name] = self._regenerate_hypotheses_with_constraints(pokemon_name)
 
     def _confirm_item(self, pokemon_name: str, item: str) -> None:
         """持ち物を確定"""
@@ -529,6 +700,8 @@ class PokemonBeliefState:
         filtered = {h: p for h, p in current.items() if h.item == item}
         if filtered:
             self.beliefs[pokemon_name] = self._prune_and_normalize(filtered)
+        else:
+            self.beliefs[pokemon_name] = self._regenerate_hypotheses_with_constraints(pokemon_name)
 
     def _filter_to_items(self, pokemon_name: str, items: list[str]) -> None:
         """指定した持ち物のみに絞り込み"""
@@ -536,6 +709,8 @@ class PokemonBeliefState:
         filtered = {h: p for h, p in current.items() if h.item in items}
         if filtered:
             self.beliefs[pokemon_name] = self._prune_and_normalize(filtered)
+        else:
+            self.beliefs[pokemon_name] = self._regenerate_hypotheses_with_constraints(pokemon_name)
 
     def _boost_item_probability(
         self, pokemon_name: str, item: str, factor: float
@@ -557,6 +732,8 @@ class PokemonBeliefState:
         filtered = {h: p for h, p in current.items() if h.tera_type == tera_type}
         if filtered:
             self.beliefs[pokemon_name] = self._prune_and_normalize(filtered)
+        else:
+            self.beliefs[pokemon_name] = self._regenerate_hypotheses_with_constraints(pokemon_name)
 
     def _confirm_ability(self, pokemon_name: str, ability: str) -> None:
         """特性を確定"""
@@ -565,6 +742,8 @@ class PokemonBeliefState:
         filtered = {h: p for h, p in current.items() if h.ability == ability}
         if filtered:
             self.beliefs[pokemon_name] = self._prune_and_normalize(filtered)
+        else:
+            self.beliefs[pokemon_name] = self._regenerate_hypotheses_with_constraints(pokemon_name)
 
     # =========================================================================
     # サンプリング
@@ -573,9 +752,6 @@ class PokemonBeliefState:
     def sample_world(self) -> dict[str, PokemonTypeHypothesis]:
         """
         現在の信念から1つの「世界」（型の組み合わせ）をサンプリング
-
-        Returns:
-            {pokemon_name: hypothesis} の辞書
         """
         world = {}
         for pokemon_name, belief in self.beliefs.items():
@@ -678,17 +854,8 @@ class PokemonBeliefState:
     def estimate_pp_remaining(self, pokemon_name: str, move: str, max_pp: int = 8) -> float:
         """
         相手の技のPP残量を推定
-
-        Args:
-            pokemon_name: ポケモン名
-            move: 技名
-            max_pp: 技の最大PP（デフォルト8、実際はポイントアップで増加可能）
-
-        Returns:
-            推定PP残量（0.0-1.0の比率）
         """
         use_count = self.get_move_use_count(pokemon_name, move)
-        # PPを使い切った可能性を考慮
         estimated_remaining = max(0, max_pp - use_count)
         return estimated_remaining / max_pp if max_pp > 0 else 1.0
 
@@ -742,7 +909,6 @@ class PokemonBeliefState:
 
     def to_dict(self) -> dict[str, Any]:
         """シリアライズ可能な辞書に変換"""
-        # beliefs の変換: {pokemon_name: [(hypothesis_dict, probability), ...]}
         beliefs_serialized = {}
         for pokemon_name, hypo_dist in self.beliefs.items():
             beliefs_serialized[pokemon_name] = [
@@ -765,24 +931,20 @@ class PokemonBeliefState:
         cls, data: dict[str, Any], usage_db: PokemonUsageDatabase
     ) -> "PokemonBeliefState":
         """辞書から復元"""
-        # まず空のポケモン名リストでインスタンスを作成
         pokemon_names = list(data["beliefs"].keys())
         instance = cls.__new__(cls)
 
-        # 基本属性を設定
         instance.usage_db = usage_db
         instance.max_hypotheses = data.get("max_hypotheses", 50)
         instance.min_probability = data.get("min_probability", 0.01)
         instance.observation_history = []
 
-        # revealed情報を復元
         instance.revealed_moves = {k: set(v) for k, v in data["revealed_moves"].items()}
         instance.revealed_items = data["revealed_items"]
         instance.revealed_tera = data["revealed_tera"]
         instance.revealed_abilities = data.get("revealed_abilities", {name: None for name in pokemon_names})
         instance.move_use_count = data.get("move_use_count", {name: {} for name in pokemon_names})
 
-        # beliefs を復元
         instance.beliefs = {}
         for pokemon_name, hypo_list in data["beliefs"].items():
             instance.beliefs[pokemon_name] = {

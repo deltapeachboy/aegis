@@ -1,8 +1,8 @@
 """
-仮説ベースMCTS
+仮説ベースMCTS (完全型推測対応版)
 
-相手の持ち物が不明な状況で、持ち物の仮説をサンプリングして
-複数のMCTSを実行し、結果を集約して最適行動を決定する。
+相手の特性・持ち物・技構成・努力値が不明な状況で、総合的な型仮説（PokemonTypeHypothesis）
+を信念状態からサンプリングして複数のMCTSを実行し、結果を集約して最適行動を決定する。
 """
 
 from __future__ import annotations
@@ -12,28 +12,24 @@ import random
 from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Any
 
+# 🌟 pokepy インポート
+from pokepy.battle import Battle
+from pokepy.battle import Pokemon
+
+# 🌟 src.rebel から信念状態と仮説適用関数を絶対パスインポート
+from src.rebel.belief_state import PokemonBeliefState, PokemonTypeHypothesis
+from src.hypothesis.pokemon_usage_database import PokemonUsageDatabase
+from src.rebel.public_state import _apply_hypothesis_to_pokemon
+
+# 🌟 MCTSNode 関連の絶対パスインポート
 from src.mcts.mcts_battle import MCTSNode, MCTSNodeForChangeCommand, MyMCTSBattle
-from src.pokemon_battle_sim.battle import Battle
-
-from .item_belief_state import ItemBeliefState
-from .item_prior_database import ItemPriorDatabase
 
 
 def _calculate_battle_score(battle: Battle, player: int) -> float:
     """
     勝敗ベース + 中間評価のハイブリッドスコア
-
-    - 勝敗が確定していれば 1.0 / 0.0
-    - 未決着なら残りHP比率と生存数ベースの中間評価
-
-    Args:
-        battle: 対戦状態
-        player: スコアを計算するプレイヤー
-
-    Returns:
-        0.0〜1.0 のスコア（高いほど有利）
     """
     winner = battle.winner()
 
@@ -46,15 +42,12 @@ def _calculate_battle_score(battle: Battle, player: int) -> float:
         alive_count = 0
         hp_ratio_sum = 0.0
 
-        for pokemon in battle.selected[p]:
-            if pokemon is not None and pokemon.hp > 0:
+        for p_obj in battle.selected[p]:
+            if p_obj is not None and p_obj.hp > 0:
                 alive_count += 1
-                # status[0] は最大HP
-                max_hp = pokemon.status[0] if pokemon.status[0] > 0 else 1
-                hp_ratio_sum += pokemon.hp / max_hp
+                max_hp = p_obj.status[0] if p_obj.status[0] > 0 else 1
+                hp_ratio_sum += p_obj.hp / max_hp
 
-        # 生存数 + HP比率の重み付き合計
-        # 生存数を重視（1体生存 = 1.0）、HP比率は補助的（0.3倍）
         return alive_count + 0.3 * hp_ratio_sum
 
     my_strength = calc_team_strength(player)
@@ -62,7 +55,7 @@ def _calculate_battle_score(battle: Battle, player: int) -> float:
 
     total = my_strength + opp_strength
     if total < 1e-6:
-        return 0.5  # 両者全滅（ありえないが安全のため）
+        return 0.5
 
     return my_strength / total
 
@@ -82,7 +75,6 @@ def _ensure_score_method(battle: Battle) -> Battle:
 # =============================================================================
 # 改善版スコア関数を使うカスタムMCTS
 # =============================================================================
-
 
 def _hypothesis_default_policy(state: Battle, player: int) -> float:
     """
@@ -158,7 +150,6 @@ def _hypothesis_mcts(
         _hypothesis_backup(leaf, reward)
 
     if not root.children:
-        # 子ノードがない場合（ありえないが安全のため）
         available = root_state.available_commands(player)
         return available[0] if available else Battle.SKIP, root
 
@@ -181,25 +172,25 @@ class PolicyValue:
 
 class HypothesisMCTS:
     """
-    仮説ベースのMCTS
+    仮説ベースのMCTS (完全型推測対応版)
 
-    相手の持ち物について複数の仮説をサンプリングし、
+    相手の特性・持ち物・技構成・努力値について複数の仮説をサンプリングし、
     各仮説に対してMCTSを実行して結果を集約する。
     """
 
     def __init__(
         self,
-        prior_db: ItemPriorDatabase,
+        usage_db: PokemonUsageDatabase,
         n_hypotheses: int = 30,
         mcts_iterations: int = 200,
     ):
         """
         Args:
-            prior_db: 持ち物事前確率データベース
-            n_hypotheses: サンプリングする仮説の数
+            usage_db: 環境使用率・事前確率データベース
+            n_hypotheses: サンプリングする仮説（世界線）の数
             mcts_iterations: 各仮説でのMCTSイテレーション数
         """
-        self.prior_db = prior_db
+        self.usage_db = usage_db
         self.n_hypotheses = n_hypotheses
         self.mcts_iterations = mcts_iterations
 
@@ -207,40 +198,27 @@ class HypothesisMCTS:
         self,
         battle: Battle,
         player: int,
-        belief_state: ItemBeliefState,
+        belief_state: PokemonBeliefState,
         phase: str = "battle",
     ) -> PolicyValue:
         """
         仮説ベースMCTSを実行
-
-        Args:
-            battle: 現在の対戦状態
-            player: 行動するプレイヤー (0 or 1)
-            belief_state: 相手持ち物の信念状態
-            phase: "battle" または "change"
-
-        Returns:
-            PolicyValue: 行動確率分布と勝率
         """
-        # 利用可能なコマンドを取得
         available_commands = battle.available_commands(player, phase=phase)
 
         if not available_commands:
             return PolicyValue(policy={}, value=0.5)
 
         if len(available_commands) == 1:
-            # 選択肢が1つしかない場合
             return PolicyValue(policy={available_commands[0]: 1.0}, value=0.5)
 
-        # 仮説をサンプリング
-        hypotheses = belief_state.sample_hypotheses(self.n_hypotheses)
+        # 🌟 最新の信念状態から総合的な型仮説をサンプリング
+        hypotheses = belief_state.sample_worlds(self.n_hypotheses)
 
-        # 各仮説でMCTSを実行
-        all_results: list[tuple[dict[int, int], float]] = []
-
-        for hypothesis in hypotheses:
-            # 仮説を適用したBattleを作成
-            hypo_battle = self._apply_hypothesis(battle, player, hypothesis)
+        all_results = []
+        for world in hypotheses:
+            # 具体的な Battle を構築（仮説の適用）
+            hypo_battle = self._apply_hypothesis(battle, player, world)
 
             # MCTS実行（改善版スコア関数を使用）
             best_move, root = _hypothesis_mcts(
@@ -266,39 +244,27 @@ class HypothesisMCTS:
         return self._aggregate_results(all_results, available_commands)
 
     def _apply_hypothesis(
-        self, battle: Battle, player: int, hypothesis: dict[str, str]
+        self, battle: Battle, player: int, hypothesis: dict[str, PokemonTypeHypothesis]
     ) -> Battle:
         """
         仮説（持ち物の組み合わせ）をBattleに適用
-
-        Args:
-            battle: 元の対戦状態
-            player: 自分のプレイヤー番号
-            hypothesis: {pokemon_name: item_name} の辞書
-
-        Returns:
-            仮説が適用された新しいBattle
         """
         hypo_battle = deepcopy(battle)
-
-        # 相手のプレイヤー
         opponent = 1 - player
 
-        # 相手の選出ポケモンに持ち物を設定
+        # 相手の選出ポケモンに持ち物などの型仮説を一括適用
         for pokemon in hypo_battle.selected[opponent]:
             pokemon_name = pokemon.name
             if pokemon_name in hypothesis:
-                pokemon.item = hypothesis[pokemon_name]
+                _apply_hypothesis_to_pokemon(pokemon, hypothesis[pokemon_name])
 
         # 場に出ているポケモンにも適用
         if hypo_battle.pokemon[opponent] is not None:
             pokemon_name = hypo_battle.pokemon[opponent].name
             if pokemon_name in hypothesis:
-                hypo_battle.pokemon[opponent].item = hypothesis[pokemon_name]
+                _apply_hypothesis_to_pokemon(hypo_battle.pokemon[opponent], hypothesis[pokemon_name])
 
-        # scoreメソッドを追加（MCTSで必要）
         _ensure_score_method(hypo_battle)
-
         return hypo_battle
 
     def _aggregate_results(
@@ -308,15 +274,7 @@ class HypothesisMCTS:
     ) -> PolicyValue:
         """
         複数の仮説からの結果を集約
-
-        Args:
-            results: [(visit_counts, value), ...] のリスト
-            available_commands: 利用可能なコマンド
-
-        Returns:
-            集約されたPolicyValue
         """
-        # 訪問回数の合計
         total_visits: dict[int, int] = defaultdict(int)
         total_value = 0.0
 
@@ -330,11 +288,9 @@ class HypothesisMCTS:
         if visit_sum > 0:
             policy = {cmd: total_visits[cmd] / visit_sum for cmd in available_commands}
         else:
-            # フォールバック: 均等分布
             n = len(available_commands)
             policy = {cmd: 1.0 / n for cmd in available_commands}
 
-        # Valueを平均
         avg_value = total_value / len(results) if results else 0.5
 
         return PolicyValue(policy=policy, value=avg_value)
@@ -343,20 +299,11 @@ class HypothesisMCTS:
         self,
         battle: Battle,
         player: int,
-        belief_state: ItemBeliefState,
+        belief_state: PokemonBeliefState,
         phase: str = "battle",
     ) -> int:
         """
         最も推奨される行動を取得
-
-        Args:
-            battle: 現在の対戦状態
-            player: 行動するプレイヤー
-            belief_state: 相手持ち物の信念状態
-            phase: "battle" または "change"
-
-        Returns:
-            最も確率の高いコマンド
         """
         pv = self.search(battle, player, belief_state, phase)
         if not pv.policy:
@@ -366,53 +313,42 @@ class HypothesisMCTS:
 
 class HypothesisMCTSBattle(Battle):
     """
-    仮説ベースMCTSを使用するBattleクラス
-
-    MyMCTSBattleの代わりに使用することで、
-    相手の持ち物が不明な状況でもMCTSが使える。
+    仮説ベースMCTSを使用するBattleクラス (完全型推測対応版)
     """
 
     def __init__(
         self,
-        prior_db: ItemPriorDatabase,
+        usage_db: PokemonUsageDatabase,
         n_hypotheses: int = 30,
         mcts_iterations: int = 200,
         seed: Optional[int] = None,
     ):
         super().__init__(seed=seed)  # type: ignore[arg-type]
         self.hypothesis_mcts = HypothesisMCTS(
-            prior_db=prior_db,
+            usage_db=usage_db,
             n_hypotheses=n_hypotheses,
             mcts_iterations=mcts_iterations,
         )
-        self.belief_states: dict[int, ItemBeliefState] = {}
+        self.belief_states: dict[int, PokemonBeliefState] = {}
 
-    def set_belief_state(self, player: int, belief_state: ItemBeliefState) -> None:
-        """プレイヤーの信念状態を設定"""
+    def set_belief_state(self, player: int, belief_state: PokemonBeliefState) -> None:
         self.belief_states[player] = belief_state
 
-    def init_belief_state(self, player: int) -> ItemBeliefState:
-        """
-        プレイヤーの信念状態を初期化
-
-        相手の選出ポケモンから信念状態を作成
-        """
+    def init_belief_state(self, player: int) -> PokemonBeliefState:
         opponent = 1 - player
         opponent_pokemon_names = [p.name for p in self.selected[opponent]]
 
-        belief_state = ItemBeliefState(
+        belief_state = PokemonBeliefState(
             opponent_pokemon_names=opponent_pokemon_names,
-            prior_db=self.hypothesis_mcts.prior_db,
+            usage_db=self.hypothesis_mcts.usage_db,
         )
         self.belief_states[player] = belief_state
         return belief_state
 
-    def get_belief_state(self, player: int) -> Optional[ItemBeliefState]:
-        """プレイヤーの信念状態を取得"""
+    def get_belief_state(self, player: int) -> Optional[PokemonBeliefState]:
         return self.belief_states.get(player)
 
     def battle_command(self, player: int) -> int:
-        """仮説ベースMCTSで行動を選択"""
         if player not in self.belief_states:
             self.init_belief_state(player)
 
@@ -424,7 +360,6 @@ class HypothesisMCTSBattle(Battle):
         )
 
     def change_command(self, player: int) -> int:
-        """仮説ベースMCTSで交代先を選択"""
         if player not in self.belief_states:
             self.init_belief_state(player)
 
@@ -436,16 +371,6 @@ class HypothesisMCTSBattle(Battle):
         )
 
     def get_policy_value(self, player: int, phase: str = "battle") -> PolicyValue:
-        """
-        現在の盤面でのPolicyとValueを取得
-
-        Args:
-            player: プレイヤー番号
-            phase: "battle" または "change"
-
-        Returns:
-            PolicyValue
-        """
         if player not in self.belief_states:
             self.init_belief_state(player)
 
