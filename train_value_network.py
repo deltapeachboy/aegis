@@ -6,6 +6,7 @@ import json
 import io
 import time
 import random
+import signal  # 🌟 タイムアウト強制遮断・パッチ用に追加
 from copy import deepcopy
 
 # =========================================================================
@@ -102,6 +103,16 @@ class SelfPlayReplayDataset(Dataset):
         if not os.path.exists(self.log_path):
             raise FileNotFoundError(f"対戦ログファイル '{self.log_path}' が見つかりません。")
 
+        # タイムアウト例外のローカル定義
+        class ReplayTimeoutException(Exception):
+            pass
+
+        def replay_timeout_handler(signum, frame):
+            raise ReplayTimeoutException("Replay match timed out!")
+
+        if hasattr(signal, "SIGALRM"):
+            signal.signal(signal.SIGALRM, replay_timeout_handler)
+
         with open(self.log_path, "r", encoding="utf-8") as f:
             for line_idx, line in enumerate(f, 1):
                 if not line.strip():
@@ -116,106 +127,123 @@ class SelfPlayReplayDataset(Dataset):
                 if winner is None or winner == -1:
                     continue
 
-                battle = Battle(seed=seed)
-                team_p0 = self._rebuild_team(match_data["teams"][0])
-                team_p1 = self._rebuild_team(match_data["teams"][1])
-                battle.selected[0] = team_p0
-                battle.selected[1] = team_p1
+                # 特徴量リストのロールバック用バックアップ
+                start_state_idx = len(self.encoded_states)
+                start_target_idx = len(self.targets)
 
-                battle.selected[0] = [deepcopy(team_p0[i]) for i in selections[0]]
-                battle.selected[1] = [deepcopy(team_p1[i]) for i in selections[1]]
+                # 🌟 [リプレイ守護神] 各試合の解読に2秒制限を適用。不整合ハングを自動で切り捨てます。
+                if hasattr(signal, "SIGALRM"):
+                    signal.alarm(2)
 
-                beliefs = [
-                    PokemonBeliefState.__new__(PokemonBeliefState),
-                    PokemonBeliefState.__new__(PokemonBeliefState)
-                ]
-                for pl in [0, 1]:
-                    beliefs[pl].usage_db = None
-                    beliefs[pl].max_hypotheses = 30
-                    beliefs[pl].min_probability = 0.01
-                    beliefs[pl].observation_history = []
-                    opp_names = [p.name for p in battle.selected[1 - pl]]
-                    beliefs[pl].revealed_moves = {name: set() for name in opp_names}
-                    beliefs[pl].revealed_items = {name: None for name in opp_names}
-                    beliefs[pl].revealed_abilities = {name: None for name in opp_names}
-                    beliefs[pl].revealed_tera = {name: None for name in opp_names}
-                    beliefs[pl].move_use_count = {name: {} for name in opp_names}
-                    beliefs[pl].beliefs = {}
-                    for name in opp_names:
-                        beliefs[pl].beliefs[name] = self.analyzer._build_flat_belief(name)
+                try:
+                    battle = Battle(seed=seed)
+                    team_p0 = self._rebuild_team(match_data["teams"][0])
+                    team_p1 = self._rebuild_team(match_data["teams"][1])
+                    battle.selected[0] = team_p0
+                    battle.selected[1] = team_p1
 
-                battle.turn = 0
-                for player in range(2):
-                    battle.change_pokemon(player, idx=0, landing=False)
-                for player in battle.speed_order:
-                    battle.land(player)
+                    battle.selected[0] = [deepcopy(team_p0[i]) for i in selections[0]]
+                    battle.selected[1] = [deepcopy(team_p1[i]) for i in selections[1]]
 
-                for turn_idx, turn_data in enumerate(history):
+                    beliefs = [
+                        PokemonBeliefState.__new__(PokemonBeliefState),
+                        PokemonBeliefState.__new__(PokemonBeliefState)
+                    ]
                     for pl in [0, 1]:
-                        pbs = PublicBeliefState.from_battle(battle, perspective=pl, belief=beliefs[pl])
-                        with torch.no_grad():
-                            encoded_pbs = self.analyzer.cfr_solver.value_network.encoder(pbs).cpu()
-                        self.encoded_states.append(encoded_pbs)
+                        beliefs[pl].usage_db = None
+                        beliefs[pl].max_hypotheses = 30
+                        beliefs[pl].min_probability = 0.01
+                        beliefs[pl].observation_history = []
+                        opp_names = [p.name for p in battle.selected[1 - pl]]
+                        beliefs[pl].revealed_moves = {name: set() for name in opp_names}
+                        beliefs[pl].revealed_items = {name: None for name in opp_names}
+                        beliefs[pl].revealed_abilities = {name: None for name in opp_names}
+                        beliefs[pl].revealed_tera = {name: None for name in opp_names}
+                        beliefs[pl].move_use_count = {name: {} for name in opp_names}
+                        beliefs[pl].beliefs = {}
+                        for name in opp_names:
+                            beliefs[pl].beliefs[name] = self.analyzer._build_flat_belief(name)
 
-                        # 🌟 [追加仕様：学習時における期待値の報酬シェイピング]
-                        my_win = 1.0 if pl == winner else 0.0
+                    battle.turn = 0
+                    for player in range(2):
+                        battle.change_pokemon(player, idx=0, landing=False)
+                    for player in battle.speed_order:
+                        battle.land(player)
 
-                        # 設置物・天候・能力ランク・ミミッキュ・イダイトウ補正
-                        my_side = pl
-                        opp_side = 1 - pl
-                        my_active = battle.pokemon[my_side]
-                        opp_active = battle.pokemon[opp_side]
+                    for turn_idx, turn_data in enumerate(history):
+                        for pl in [0, 1]:
+                            pbs = PublicBeliefState.from_battle(battle, perspective=pl, belief=beliefs[pl])
+                            with torch.no_grad():
+                                encoded_pbs = self.analyzer.cfr_solver.value_network.encoder(pbs).cpu()
+                            self.encoded_states.append(encoded_pbs)
 
-                        if hasattr(battle, 'side_conditions') and battle.side_conditions:
-                            if battle.side_conditions[opp_side].get('stealth_rock'): my_win += 0.05
-                            if battle.side_conditions[my_side].get('stealth_rock'): my_win -= 0.05
+                            # [追加仕様：期待値の報酬シェイピング算出]
+                            my_win = 1.0 if pl == winner else 0.0
+                            my_side = pl
+                            opp_side = 1 - pl
+                            my_active = battle.pokemon[my_side]
+                            opp_active = battle.pokemon[opp_side]
 
-                        if opp_active:
-                            if getattr(opp_active, 'yawn', 0) > 0: my_win += 0.04
-                            if getattr(opp_active, 'status_con', None): my_win += 0.03
-                            if opp_active.name == "ミミッキュ": my_win -= 0.05
-                            if "イダイトウ" in opp_active.name:
-                                dead_opp = sum(1 for p in battle.selected[opp_side] if p.hp <= 0)
-                                my_win -= dead_opp * 0.03
+                            if hasattr(battle, 'side_conditions') and battle.side_conditions:
+                                if battle.side_conditions[opp_side].get('stealth_rock'): my_win += 0.05
+                                if battle.side_conditions[my_side].get('stealth_rock'): my_win -= 0.05
 
-                        if my_active:
-                            if getattr(my_active, 'yawn', 0) > 0: my_win -= 0.04
-                            if getattr(my_active, 'status_con', None): my_win -= 0.03
-                            if my_active.name == "ミミッキュ": my_win += 0.05
-                            if "イダイトウ" in my_active.name:
-                                dead_my = sum(1 for p in battle.selected[my_side] if p.hp <= 0)
-                                my_win += dead_my * 0.03
+                            if opp_active:
+                                if getattr(opp_active, 'yawn', 0) > 0: my_win += 0.04
+                                if getattr(opp_active, 'status_con', None): my_win += 0.03
+                                if opp_active.name == "ミミッキュ": my_win -= 0.05
+                                if "イダイトウ" in opp_active.name:
+                                    dead_opp = sum(1 for p in battle.selected[opp_side] if p.hp <= 0)
+                                    my_win -= dead_opp * 0.03
 
-                        if my_active and hasattr(my_active, 'rank'):
-                            for s_idx, factor in [(1, 0.02), (3, 0.02), (5, 0.02), (2, 0.01), (4, 0.01)]:
-                                try:
-                                    my_win += my_active.rank[s_idx] * factor
-                                except Exception:
-                                    pass
+                            if my_active:
+                                if getattr(my_active, 'yawn', 0) > 0: my_win -= 0.04
+                                if getattr(my_active, 'status_con', None): my_win -= 0.03
+                                if my_active.name == "ミミッキュ": my_win += 0.05
+                                if "イダイトウ" in my_active.name:
+                                    dead_my = sum(1 for p in battle.selected[my_side] if p.hp <= 0)
+                                    my_win += dead_my * 0.03
 
-                        if opp_active and hasattr(opp_active, 'rank'):
-                            for s_idx, factor in [(1, 0.02), (3, 0.02), (5, 0.02), (2, 0.01), (4, 0.01)]:
-                                try:
-                                    my_win -= opp_active.rank[s_idx] * factor
-                                except Exception:
-                                    pass
+                            if my_active and hasattr(my_active, 'rank'):
+                                for s_idx, factor in [(1, 0.02), (3, 0.02), (5, 0.02), (2, 0.01), (4, 0.01)]:
+                                    try:
+                                        my_win += my_active.rank[s_idx] * factor
+                                    except Exception:
+                                        pass
 
-                        if getattr(battle, 'weather', None) == 'sandstorm':
-                            if my_active and any(
-                                t in ['いわ', 'じめん', 'はがね'] for t in my_active.types): my_win += 0.02
-                            if opp_active and any(
-                                t in ['いわ', 'じめん', 'はがね'] for t in opp_active.types): my_win -= 0.02
+                            if opp_active and hasattr(opp_active, 'rank'):
+                                for s_idx, factor in [(1, 0.02), (3, 0.02), (5, 0.02), (2, 0.01), (4, 0.01)]:
+                                    try:
+                                        my_win -= opp_active.rank[s_idx] * factor
+                                    except Exception:
+                                        pass
 
-                        my_win = max(0.01, min(0.99, my_win))
-                        opp_win = 1.0 - my_win
-                        self.targets.append(torch.tensor([my_win, opp_win], dtype=torch.float))
+                            if getattr(battle, 'weather', None) == 'sandstorm':
+                                if my_active and any(
+                                        t in ['いわ', 'じめん', 'はがね'] for t in my_active.types): my_win += 0.02
+                                if opp_active and any(
+                                        t in ['いわ', 'じめん', 'はがね'] for t in opp_active.types): my_win -= 0.02
 
-                    cmds = turn_data["commands"]
-                    battle.command = cmds
+                            my_win = max(0.01, min(0.99, my_win))
+                            opp_win = 1.0 - my_win
+                            self.targets.append(torch.tensor([my_win, opp_win], dtype=torch.float))
 
-                    # 🌟 [フック登録] リプレイ進行直前に、現在再現中の battle をパッチへ登録する
-                    builtins._aegis_current_battle = battle
-                    battle.proceed(commands=cmds)
+                        cmds = turn_data["commands"]
+                        battle.command = cmds
+
+                        builtins._aegis_current_battle = battle
+                        battle.proceed(commands=cmds)
+
+                except ReplayTimeoutException:
+                    # 🌟 タイムアウト時の安全なロールバックとログ出力
+                    print(
+                        f"⚠️ [Replay Guardian] 試合 {line_idx} の再現中に乱数不整合によるハングを検知したため、この試合の特徴量をスキップします。")
+                    self.encoded_states = self.encoded_states[:start_state_idx]
+                    self.targets = self.targets[:start_target_idx]
+                    continue
+                finally:
+                    if hasattr(signal, "SIGALRM"):
+                        signal.alarm(0)
 
                 if line_idx % 10 == 0:
                     print(f"   - {line_idx} 試合分の盤面データを展開完了...")
@@ -275,6 +303,12 @@ def train_model(log_path: str, model_save_path: str = "src/rebel/value_network.p
             raise e
 
     dataset = SelfPlayReplayDataset(log_path, analyzer)
+
+    # 🌟 もし万が一タイムアウト等ですべての試合が弾かれ、総データが0になった場合のクラッシュ防止
+    if len(dataset) == 0:
+        print("⚠️ 警告: 有効な特徴量が0件です。追加学習を安全にスキップして次の世代へ進行します。")
+        return
+
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
     model = analyzer.cfr_solver.value_network
@@ -326,7 +360,6 @@ def train_model(log_path: str, model_save_path: str = "src/rebel/value_network.p
 if __name__ == "__main__":
     Pokemon.init(season=22)
 
-    # 🌟 A. 表記揺れを吸収する patched_find の常駐化
     original_find = Pokemon.find
 
 
@@ -350,7 +383,6 @@ if __name__ == "__main__":
 
     Pokemon.find = patched_find
 
-    # 🌟 B. 分岐メガ進化名解決 patched_get_mega_name の常駐化
     original_get_mega_name = Battle.get_mega_name
 
 
@@ -373,7 +405,6 @@ if __name__ == "__main__":
 
     Battle.get_mega_name = patched_get_mega_name
 
-    # 🌟 C. 技コマンドクランプ patched_proceed の常駐化（限界突破・空技スロット防止）
     original_proceed = Battle.proceed
 
 
@@ -424,13 +455,11 @@ if __name__ == "__main__":
 
     Battle.proceed = patched_proceed
 
-    # 表記揺れマッピングの事前登録
     for target_alias in ['キングズシールド', 'キング・シールド', 'キングズ・シールド']:
         if target_alias in Pokemon.all_moves:
             Pokemon.all_moves['キングシールド'] = Pokemon.all_moves[target_alias]
             break
 
-    # 単体起動時は、カレントのデータセットログを読み込んで訓練します
     log_file_path = "log/selfplay_dataset.jsonl"
     if os.path.exists(log_file_path):
         train_model(log_path=log_file_path, epochs=15, batch_size=64, lr=1e-4)

@@ -228,7 +228,7 @@ def allocate_stat_points_randomly(indices: list, total_points: int = 66, max_sin
 
 
 def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = None) -> Dict[str, Any]:
-    """【Aegis Patched Build】型シナジーを完全結合。技・努力値テンプレート・性格を論理的に強結合"""
+    """【Aegis Patched Build】型シナジーを完全結合。技構成・努力値テンプレート・性格を完全に強結合"""
     if core_name == "ギルガルド" and "ギルガルド" not in Pokemon.zukan:
         for k in ['ギルガルド(シールド)', 'ギルガルド（シールド）']:
             if k in Pokemon.zukan:
@@ -297,8 +297,21 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
                 max_total_score = total_score
                 best_candidate = candidate
 
+        # 🌟 [ハング防止ガード] 万が一スコア判定で最適な候補が見つからなかった（=-999.0を上回れない）場合、
+        # 既存メンバーと名前が重複しない候補をランダムに選んで強制突破し、無限ループを100%防止します。
         if best_candidate:
             team_members.append(best_candidate)
+        else:
+            fallback_pool = [
+                cand for cand in self.mb_pokemon
+                if cand not in team_members and Pokemon.zukan.get(cand) and
+                   not any(
+                       Pokemon.zukan[cand]["display_name"] == Pokemon.zukan[m]["display_name"] for m in team_members)
+            ]
+            if fallback_pool:
+                team_members.append(random.choice(fallback_pool))
+            else:
+                break
 
     # 1.2倍タイプ補強アイテム
     TYPE_BOOSTING_ITEMS = {
@@ -336,6 +349,7 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
     mega_stones_in_pool = {item for item in self.mb_items if "ナイト" in item}
     normal_items_pool = list(self.mb_items - mega_stones_in_pool)
 
+    # 事前割り当てループ (メガストーン優先配置)
     for member in team_members:
         zukan_entry = Pokemon.zukan.get(member, {})
         abilities = zukan_entry.get("ability", [])
@@ -526,7 +540,6 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
 
         else:
             # C. 【極振り(ブッパ)型】 (50%)
-            # 型に合わせて、無効な組み合わせ（特殊アタッカーにHA振りなど）を排除して抽選
             ev_category = "max_out"
             max_out_candidates = ["HB", "HD", "HS"]
             if has_physical_attack or not has_special_attack:
@@ -623,66 +636,63 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
             ability = "とくせいなし"
 
         # 🌟 持ち物適合選定
-        if name not in assigned_items:
+        pre_assigned = assigned_items.get(name, "")
+        if "ナイト" not in pre_assigned:
             assigned_item = ""
-            mega_candidates = get_possible_mega_stones(name)
-            valid_mega_stones = [stone for stone in mega_candidates if stone in self.mb_items]
+            available_items = [itm for itm in normal_items_pool if
+                               itm not in assigned_items.values() or itm == pre_assigned]
+            if available_items:
+                local_item_tiers = dict(self.ITEM_TIERS)
 
-            if valid_mega_stones and random.random() < self.MEGA_PROBABILITIES.get(name, 0.50):
-                assigned_item = random.choice(valid_mega_stones)
-            else:
-                available_items = [itm for itm in normal_items_pool if itm not in assigned_items.values()]
-                if available_items:
-                    local_item_tiers = dict(self.ITEM_TIERS)
+                # 天候岩および粘土の動的ブースト
+                if "ひでり" in ability: local_item_tiers["あついいわ"] = 5.0
+                if "あめふらし" in ability: local_item_tiers["しめったいわ"] = 5.0
+                if "すなおこし" in ability: local_item_tiers["さらさらいわ"] = 5.0
+                if "ゆきふらし" in ability: local_item_tiers["つめたいいわ"] = 5.0
+                if name.split("(")[0] in self.WALL_SETTER_POKEMON:
+                    local_item_tiers["ひかりのねんど"] = 5.0
 
-                    # 天候岩および粘土の動的ブースト
-                    if "ひでり" in ability: local_item_tiers["あついいわ"] = 5.0
-                    if "あめふらし" in ability: local_item_tiers["しめったいわ"] = 5.0
-                    if "すなおこし" in ability: local_item_tiers["さらさらいわ"] = 5.0
-                    if "ゆきふらし" in ability: local_item_tiers["つめたいいわ"] = 5.0
-                    if name.split("(")[0] in self.WALL_SETTER_POKEMON:
-                        local_item_tiers["ひかりのねんど"] = 5.0
+                pokemon_ttype = zukan_entry["type"][0]
+                attack_types = set()
+                for mv in chosen_moves:
+                    mv_data = Pokemon.all_moves.get(mv, {})
+                    if mv_data and not mv_data.get("class", "").startswith("sta"):
+                        true_type = get_true_move_type(mv, ability, pokemon_ttype)
+                        attack_types.add(true_type)
 
-                    pokemon_ttype = zukan_entry["type"][0]
-                    attack_types = set()
-                    for mv in chosen_moves:
-                        mv_data = Pokemon.all_moves.get(mv, {})
-                        if mv_data and not mv_data.get("class", "").startswith("sta"):
-                            true_type = get_true_move_type(mv, ability, pokemon_ttype)
-                            attack_types.add(true_type)
+                item_weights = []
+                for itm in available_items:
+                    weight = local_item_tiers.get(itm, 0.1)
+                    if itm in TYPE_BOOSTING_ITEMS:
+                        req_type = TYPE_BOOSTING_ITEMS[itm]
+                        if req_type not in attack_types:
+                            weight = 0.0
 
-                    item_weights = []
-                    for itm in available_items:
-                        weight = local_item_tiers.get(itm, 0.1)
-                        if itm in TYPE_BOOSTING_ITEMS:
-                            req_type = TYPE_BOOSTING_ITEMS[itm]
-                            if req_type not in attack_types:
-                                weight = 0.0
-
-                        # 半減実弱点適合フィルター
-                        if itm in TYPE_REDUCING_BERRIES:
-                            req_type = TYPE_REDUCING_BERRIES[itm]
-                            is_weak = False
-                            if req_type in Pokemon.type_id:
-                                atk_id = Pokemon.type_id[req_type]
-                                eff = 1.0
-                                for def_type in zukan_entry.get("type", []):
-                                    if def_type in Pokemon.type_id:
-                                        def_id = Pokemon.type_id[def_type]
-                                        eff *= Pokemon.type_corrections[atk_id][def_id]
+                    # 半減実弱点適合フィルター (インデントバグ修正：最外周で正しく並列配置)
+                    elif itm in TYPE_REDUCING_BERRIES:
+                        req_type = TYPE_REDUCING_BERRIES[itm]
+                        is_weak = False
+                        if req_type in Pokemon.type_id:
+                            atk_id = Pokemon.type_id[req_type]
+                            eff = 1.0
+                            for def_type in zukan_entry.get("type", []):
+                                if def_type in Pokemon.type_id:
+                                    def_id = Pokemon.type_id[def_type]
+                                    eff *= Pokemon.type_corrections[atk_id][def_id]
                                 if eff > 1.0:
                                     is_weak = True
                             if not is_weak:
                                 weight = 0.0
 
-                        item_weights.append(weight)
+                    item_weights.append(weight)
 
-                    if sum(item_weights) <= 0:
-                        item_weights = [1.0] * len(available_items)
+                if sum(item_weights) <= 0:
+                    item_weights = [1.0] * len(available_items)
 
-                    assigned_item = random.choices(available_items, weights=item_weights, k=1)[0]
-
+                assigned_item = random.choices(available_items, weights=item_weights, k=1)[0]
             assigned_items[name] = assigned_item
+        else:
+            assigned_item = pre_assigned  # 🌟 事前割り当て済みメガストーン等を引き継ぎ
 
         effort = [min(252, sp * 8) for sp in stat_points]
 
@@ -917,10 +927,24 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
         # 🌟 キーワード引数を明示して、第3引数の command に landing=False がマッピングされるバグを防ぐ
         battle.change_pokemon(player=player, idx=0, command=None, landing=False)
 
+    # 🌟 1ターン目の計算が始まる前に、CFRのタイムアウト守護神（SIGALRM）のハンドラーをセット
+    class TimeoutException(Exception):
+        pass
+
+    def timeout_handler(signum, frame):
+        raise TimeoutException("CFR solve timed out!")
+
+    # UNIX/Macシステム用のシグナル登録（Windows環境では無視されます）
+    if hasattr(signal, "SIGALRM"):
+        signal.signal(signal.SIGALRM, timeout_handler)
+
     history_log = []
     while battle.winner() is None:
         battle.turn += 1
         commands = [None, None]
+        # 🌟 [追加] 今ターンの各プレイヤーの思考確率分布をログに記録するためのリスト
+        turn_strategies = [None, None]
+
         for pl in [0, 1]:
             pbs = PublicBeliefState.from_battle(battle, perspective=pl, belief=beliefs[pl])
             cfr_solver.solver.num_samples = 3
@@ -928,29 +952,52 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
             # 🌟 [フック登録] 報酬シェイピングパッチが参照できるように、現在シミュレート中の battle オブジェクトを退避
             builtins._aegis_current_battle = battle
 
-            my_strategy, _ = cfr_solver.solve(pbs, battle)
+            # 🌟 [タイムアウト守護神] 5秒ルールを適用。これを超えた場合は、ハング防止のためランダムコマンドへ安全フォールバックします。
+            my_strategy = None
+            if hasattr(signal, "SIGALRM"):
+                signal.alarm(5)  # 5秒タイマースタート
+
+            try:
+                my_strategy, _ = cfr_solver.solve(pbs, battle)
+            except TimeoutException:
+                print(
+                    f"⚠️ [Timeout Guardian] ターン {battle.turn} (プレイヤー {pl}) のCFR計算が5秒を超過したため、ハング防止目的で一時的に遮断してランダム手へフォールバックします。")
+                my_strategy = None
+            finally:
+                if hasattr(signal, "SIGALRM"):
+                    signal.alarm(0)  # タイマークリア
 
             if my_strategy:
-                # 🧠 AIの混合戦略（ナッシュ均衡思想）をコンソールに出力
-                print(f"\n   🧠 [ターン {battle.turn}] プレイヤー {pl} ({battle.pokemon[pl].name}) の思考:")
-                for action, prob in sorted(my_strategy.items(), key=lambda x: -x[1]):
+                # 🌟 [追加] 生数値を合計1.0(100%)になる本物の確率に正規化する
+                strat_sum = sum(my_strategy.values())
+                if strat_sum <= 0:
+                    strat_sum = 1.0
+                normalized_strategy = {act: (val / strat_sum) for act, val in my_strategy.items()}
+
+                # 🧠 AIの混合戦略（思考）をリアルタイムに可視化表示（確率正規化修正完了版）
+                # print(f"\n   🧠 [ターン {battle.turn}] プレイヤー {pl} ({battle.pokemon[pl].name}) の思考:")
+                formatted_strat = {}
+                for action, prob in sorted(normalized_strategy.items(), key=lambda x: -x[1]):
                     action_name = str(action)
                     if isinstance(action, int):
                         if action in range(20, 26):
                             target_idx = action - 20
                             try:
                                 target_name = battle.selected[pl][target_idx].name
-                                action_name = f"交代 ➔ {target_name}"
+                                action_name = f"switch_to_{target_name}"
                             except:
-                                action_name = f"交代(インデックス {target_idx})"
+                                action_name = f"switch_{target_idx}"
                         else:
                             move_idx = action % 10
                             try:
                                 move_name = battle.pokemon[pl].moves[move_idx]
-                                action_name = f"技: {move_name}"
+                                action_name = f"move_{move_name}"
                             except:
-                                action_name = f"技スロット {move_idx}"
-                    print(f"     ┗ {action_name:<18}: {prob * 100:.1%}")
+                                action_name = f"move_slot_{move_idx}"
+                    # 🌟 [バグ修正] すでに100倍に正規化したため、フォーマットは :.1% (自動で100倍にする) のみを使用
+                    # print(f"     ┗ {action_name:<18}: {prob:.1%}")
+                    formatted_strat[action_name] = round(prob, 4)
+                turn_strategies[pl] = formatted_strat
 
                 actions = list(my_strategy.keys())
                 probs = list(my_strategy.values())
@@ -977,7 +1024,8 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
         history_log.append({
             "turn": battle.turn,
             "commands": commands,
-            "hp": [battle.pokemon[0].hp, battle.pokemon[1].hp] if all(battle.pokemon) else [0, 0]
+            "hp": [battle.pokemon[0].hp, battle.pokemon[1].hp] if all(battle.pokemon) else [0, 0],
+            "strategies": turn_strategies  # 🌟 各ターンのAI期待確率をヒストリにバインド
         })
 
         if battle.turn >= 50:
@@ -1004,6 +1052,7 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
 # 6. 世代進化パイプラインメインループ (1000世代 & 自動再開仕様)
 # =========================================================================
 def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40):
+    print("ℹ️ 使用デバイス: cpu (安全なCPU学習に固定しました)")
     Pokemon.init(season=22)
 
     for target_alias in ['キングズシールド', 'キング・シールド', 'キングズ・シールド']:
@@ -1054,7 +1103,7 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
     print(f"  総世代数: {total_generations}世代")
     print(f"  世代ごとの対戦数: {matches_per_gen}回戦")
     if start_generation > 1:
-        print(f"  ✨ 既存の 1～{start_generation - 1} 世代的データを検出しました。")
+        print(f"  ✨ 既存 of 1～{start_generation - 1} 世代的データを検出しました。")
         print(f"  🔄 第 {start_generation} 世代からシミュレーションを再開します。")
     print("==================================================\n")
 
@@ -1076,6 +1125,7 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
                         generation=gen
                     )
                     f_out.write(json.dumps(match_data, ensure_ascii=False) + "\n")
+                    f_out.flush()  # 🌟 即時書き出しを強制して中断時のデータ破損（0バイト）を完全防止
                 except Exception as e:
                     import traceback
                     traceback.print_exc()
@@ -1212,32 +1262,50 @@ if __name__ == "__main__":
     # =========================================================================
     original_change_pokemon = Battle.change_pokemon
 
+
     def patched_change_pokemon(self, player, command=None, idx=0, landing=False, *args, **kwargs):
         """
         CFR初期化時や交代コマンド誤認による [-20] などのアクセスエラーを防止しつつ、
-        オリジナルメソッドの引数シグネチャ(command, idx, landing)を正しく保持して呼び出します。
+        控えポケモンが「ひんし状態」の場合に無限ループに陥るバグを防ぐため、
+        生存している（HP > 0）代替控えへの自動選定フォールバックを実行します。
         """
         cmd = self.command[player] if (self.command and player < len(self.command)) else None
 
-        # A. 交代コマンド（20〜25）が正しくセットされている場合のみインデックス計算を行う
+        # A. 交代先インデックスの特定
         if cmd is not None and isinstance(cmd, int) and 20 <= cmd <= 25:
-            idx_to_use = cmd - 20
+            target_idx = cmd - 20
         else:
-            idx_to_use = idx
+            target_idx = idx
 
-        # B. 選出数（3体）に対する境界値チェック
-        party_len = len(self.selected[player]) if (self.selected and player < len(self.selected)) else 0
-        if party_len > 0:
-            if idx_to_use >= party_len or idx_to_use < 0:
+        # B. 控えポケモンの状態を監査
+        party = self.selected[player] if (self.selected and player < len(self.selected)) else []
+        party_len = len(party)
+
+        is_valid = False
+        if 0 <= target_idx < party_len:
+            if party[target_idx].hp > 0:
+                is_valid = True
+
+        # C. 交代先が瀕死・または異常値の場合、生存している最初の控えを検索してクランプ
+        if not is_valid:
+            alive_idx = None
+            for idx_temp in range(party_len):
+                if party[idx_temp].hp > 0:
+                    alive_idx = idx_temp
+                    break
+
+            if alive_idx is not None:
+                idx_to_use = alive_idx
+            else:
                 idx_to_use = 0
         else:
-            idx_to_use = 0
+            idx_to_use = target_idx
 
-        # C. 期待する交代先をアクティブ枠に事前設定
+        # D. 期待する交代先をアクティブ枠に事前設定
         if party_len > 0 and self.pokemon and player < len(self.pokemon):
             self.pokemon[player] = self.selected[player][idx_to_use]
 
-        # D. 不正なコマンド値が設定されている場合の退避処理
+        # E. 不正なコマンド値が設定されている場合の退避処理
         has_invalid_cmd = False
         old_cmd_val = None
         if self.command and player < len(self.command):
@@ -1262,8 +1330,10 @@ if __name__ == "__main__":
             if has_invalid_cmd and self.command and player < len(self.command):
                 self.command[player] = old_cmd_val
 
+
     Battle.change_pokemon = patched_change_pokemon
-    print("ℹ️ [Aegis Patch] Battle.change_pokemon インデックスエラー安全防止パッチ(引数マッピング修正済)を適用しました。")
+    print(
+        "ℹ️ [Aegis Patch] Battle.change_pokemon インデックスエラー安全防止パッチ(引数マッピング修正済)を適用しました。")
 
     original_find = Pokemon.find
 
