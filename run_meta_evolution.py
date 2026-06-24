@@ -228,7 +228,7 @@ def allocate_stat_points_randomly(indices: list, total_points: int = 66, max_sin
 
 
 def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = None) -> Dict[str, Any]:
-    """【Aegis Patched Build】能力ポイント制に完全適合し、指定能力内ランダム配分とマイルド性格ブーストを統合"""
+    """【Aegis Patched Build】型シナジーを完全結合。技・努力値テンプレート・性格を論理的に強結合"""
     if core_name == "ギルガルド" and "ギルガルド" not in Pokemon.zukan:
         for k in ['ギルガルド(シールド)', 'ギルガルド（シールド）']:
             if k in Pokemon.zukan:
@@ -376,9 +376,93 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
         zukan_entry = Pokemon.zukan[name]
         dyn_data = pokemon_weights.get(name, {}) if pokemon_weights else {}
 
-        # =========================================================================
-        # 🚀 [能力ポイント(Stat Points)仕様＆性格シナジー決定エンジン]
-        # =========================================================================
+        # ----------------------------------------------------
+        # 🚀 [ステップ1: 技構成の選定を最優先で行う]
+        # ----------------------------------------------------
+        learnable = self.learnsets.get(name, ["テラバースト"])
+        move_weights = []
+        for move_name in learnable:
+            move_data = Pokemon.all_moves.get(move_name)
+            static_w = 1.0
+            if move_data:
+                power = move_data.get("power", 0)
+                priority = move_data.get("priority", 0)
+                move_class = move_data.get("class", "sta")
+
+                if power >= 80 or priority > 0 or move_name in self.POWERFUL_MOVES_KEYWORDS:
+                    static_w = 3.0
+                elif move_class == "sta" and move_name not in self.POWERFUL_MOVES_KEYWORDS:
+                    static_w = 0.1
+
+            dynamic_w = dyn_data.get("moves", {}).get(move_name, 1.0)
+            move_weights.append(static_w * dynamic_w)
+
+        chosen_moves = []
+        temp_pool = list(learnable)
+        temp_weights = list(move_weights)
+
+        # 80%の確率で物理/特殊問わず攻撃技を最低1個優先的にスロットにねじ込む
+        attack_moves_pool = []
+        for m in learnable:
+            m_data = Pokemon.all_moves.get(m)
+            if m_data and m_data.get("class", "sta") != "sta":
+                attack_moves_pool.append(m)
+
+        force_attack = (random.random() < 0.80) and len(attack_moves_pool) > 0
+        if force_attack:
+            atk_weights = [move_weights[learnable.index(m)] for m in attack_moves_pool]
+            if sum(atk_weights) <= 0:
+                atk_weights = [1.0] * len(attack_moves_pool)
+
+            chosen_atk = random.choices(attack_moves_pool, weights=atk_weights, k=1)[0]
+            chosen_moves.append(chosen_atk)
+            idx = temp_pool.index(chosen_atk)
+            temp_pool.pop(idx)
+            temp_weights.pop(idx)
+
+        # 残りの通常サンプリング
+        num_to_select = min(4 - len(chosen_moves), len(temp_pool))
+        for _ in range(num_to_select):
+            if sum(temp_weights) <= 0:
+                temp_weights = [1.0] * len(temp_pool)
+            chosen = random.choices(temp_pool, weights=temp_weights, k=1)[0]
+            chosen_moves.append(chosen)
+            idx = temp_pool.index(chosen)
+            temp_pool.pop(idx)
+            temp_weights.pop(idx)
+
+        # 補填処理
+        if len(chosen_moves) < 4:
+            extra_pool = [m for m in learnable if m not in chosen_moves]
+            needed = 4 - len(chosen_moves)
+            if extra_pool:
+                extra_moves = random.sample(extra_pool, min(needed, len(extra_pool)))
+                chosen_moves.extend(extra_moves)
+            while len(chosen_moves) < 4:
+                chosen_moves.append("わるあがき")
+
+        # ----------------------------------------------------
+        # 🚀 [ステップ2: 確定した技から物理・特殊のアタッカー型属性を判定]
+        # ----------------------------------------------------
+        has_physical_attack = False
+        has_special_attack = False
+        for mv in chosen_moves:
+            mv_data = Pokemon.all_moves.get(mv)
+            if mv_data:
+                mv_class = mv_data.get("class", "sta")
+                if mv_class == "phy":
+                    has_physical_attack = True
+                elif mv_class == "spc":
+                    has_special_attack = True
+
+        if any(m in chosen_moves for m in ["つるぎのまい", "りゅうのまい", "ビルドアップ", "からをやぶる"]):
+            has_physical_attack = True
+        if any(m in chosen_moves for m in ["わるだくみ", "めいそう"]):
+            has_special_attack = True
+
+        # ----------------------------------------------------
+        # 🚀 [ステップ3: 攻撃型に合わせて努力値テンプレートをフィルタ抽選]
+        # ----------------------------------------------------
         base_stats = zukan_entry.get("base", [100, 100, 100, 100, 100, 100])
         h, a, b, c, d, s = base_stats[0], base_stats[1], base_stats[2], base_stats[3], base_stats[4], base_stats[5]
 
@@ -386,26 +470,22 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
         ev_category = "max_out"
         adj_nature_weights = {}
 
-        # 確率抽選 (極振り 50%, 両刀 4%, 複合調整 46%)
         rand_ev = random.random()
 
         if rand_ev < 0.04:
-            # A. 【両刀アタッカー型】 (4%) ➔ 指定3種の中でのポイント配分をランダム化
+            # A. 【両刀型】 (4%)
             ev_category = "mixed"
             if random.random() < 0.5:
-                # ACS型 (インデックス 1:A, 3:C, 5:S)
                 stat_points = allocate_stat_points_randomly([1, 3, 5], total_points=66, max_single=32)
-                # マイルド性格ブースト (最大 7.5)
                 adj_nature_weights["せっかち"] = 7.5
                 adj_nature_weights["むじゃき"] = 7.5
             else:
-                # HAC型 (インデックス 0:H, 1:A, 3:C)
                 stat_points = allocate_stat_points_randomly([0, 1, 3], total_points=66, max_single=32)
                 adj_nature_weights["ゆうかん"] = 7.5
                 adj_nature_weights["れいせい"] = 7.5
 
         elif rand_ev < 0.50:
-            # B. 【複合調整型】 (46%) ➔ 指定能力スロット内でのポイント配分をランダム化
+            # B. 【複合調整型】 (46%)
             ev_category = "hybrid"
             hybrid_patterns = [
                 ("HBD", [0, 2, 4]),
@@ -422,11 +502,11 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
                 ("HDS", [0, 4, 5]),
             ]
 
-            is_physical = a > c
+            # 物理技のみならC（特攻）を含むパターンを完全に除外、特殊技のみならA（攻撃）を排除
             valid_patterns = []
             for name_pat, idx_list in hybrid_patterns:
-                if "A" in name_pat and not is_physical: continue
-                if "C" in name_pat and is_physical: continue
+                if "A" in name_pat and has_special_attack and not has_physical_attack: continue
+                if "C" in name_pat and has_physical_attack and not has_special_attack: continue
                 valid_patterns.append((name_pat, idx_list))
 
             if not valid_patterns:
@@ -445,10 +525,16 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
                 adj_nature_weights["おだやか"] = 4.0
 
         else:
-            # C. 【極振り(ブッパ)基本型】 (50%)
-            # 🌟 【新仕様】Sの速さに関係なく、7つのバリエーションから完全にランダムに1つを選択して極振りする
+            # C. 【極振り(ブッパ)型】 (50%)
+            # 型に合わせて、無効な組み合わせ（特殊アタッカーにHA振りなど）を排除して抽選
             ev_category = "max_out"
-            chosen_max_type = random.choice(["HA", "HB", "HC", "HD", "HS", "AS", "CS"])
+            max_out_candidates = ["HB", "HD", "HS"]
+            if has_physical_attack or not has_special_attack:
+                max_out_candidates += ["HA", "AS"]
+            if has_special_attack or not has_physical_attack:
+                max_out_candidates += ["HC", "CS"]
+
+            chosen_max_type = random.choice(max_out_candidates)
 
             if chosen_max_type == "HA":
                 stat_points[0], stat_points[1], stat_points[5] = 32, 32, 2
@@ -477,94 +563,47 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
                 adj_nature_weights["おくびょう"] = 4.0
                 adj_nature_weights["ひかえめ"] = 2.5
 
-        # 🚀 [B. 技構成の選定を先行]
-        learnable = self.learnsets.get(name, ["テラバースト"])
-        move_weights = []
-        for move_name in learnable:
-            move_data = Pokemon.all_moves.get(move_name)
-            static_w = 1.0
-            if move_data:
-                power = move_data.get("power", 0)
-                priority = move_data.get("priority", 0)
-                move_class = move_data.get("class", "sta")
-
-                if power >= 80 or priority > 0 or move_name in self.POWERFUL_MOVES_KEYWORDS:
-                    static_w = 3.0
-                elif move_class == "sta" and move_name not in self.POWERFUL_MOVES_KEYWORDS:
-                    static_w = 0.1
-
-            dynamic_w = dyn_data.get("moves", {}).get(move_name, 1.0)
-            move_weights.append(static_w * dynamic_w)
-
-        chosen_moves = []
-        temp_pool = list(learnable)
-        temp_weights = list(move_weights)
-        num_to_select = min(4, len(temp_pool))
-
-        for _ in range(num_to_select):
-            if sum(temp_weights) <= 0:
-                temp_weights = [1.0] * len(temp_pool)
-            chosen = random.choices(temp_pool, weights=temp_weights, k=1)[0]
-            chosen_moves.append(chosen)
-            idx = temp_pool.index(chosen)
-            temp_pool.pop(idx)
-            temp_weights.pop(idx)
-
-        # 🌟 [追加：リアル技4枠補填仕様]
-        if len(chosen_moves) < 4:
-            extra_pool = [m for m in learnable if m not in chosen_moves]
-            needed = 4 - len(chosen_moves)
-            if extra_pool:
-                extra_moves = random.sample(extra_pool, min(needed, len(extra_pool)))
-                chosen_moves.extend(extra_moves)
-            while len(chosen_moves) < 4:
-                chosen_moves.append("わるあがき")
-
-        # 🚀 [C. 確定した技構成に基づく「型シナジーブースト（アプローチ④）」] - コメントアウト無効化
+        # ----------------------------------------------------
+        # 🚀 [ステップ4: 致命的矛盾を生まないマイルド性格抽選]
+        # ----------------------------------------------------
         adj_ability_weights = {}
 
-        """
-        if "りゅうのまい" in chosen_moves or "からをやぶる" in chosen_moves or "つるぎのまい" in chosen_moves:
-            adj_nature_weights["いじっぱり"] = max(adj_nature_weights.get("いじっぱり", 1.0), 5.0)
-            adj_nature_weights["ようき"] = max(adj_nature_weights.get("ようき", 1.0), 5.0)
-            if "マルチスケイル" in zukan_entry.get("ability", []):
-                adj_ability_weights["マルチスケイル"] = 5.0
-            if "かそく" in zukan_entry.get("ability", []):
-                adj_ability_weights["かそく"] = 5.0
-            if "くだけるよろい" in zukan_entry.get("ability", []):
-                adj_ability_weights["くだけるよろい"] = 5.0
+        if "オーロラベール" in chosen_moves or "ふぶき" in chosen_moves:
+            if "ゆきふらし" in zukan_entry.get("ability", []):
+                adj_ability_weights["ゆきふらし"] = 5.0
+            elif "ゆきがくれ" in zukan_entry.get("ability", []):
+                adj_ability_weights["ゆきがくれ"] = 2.0
+            assigned_items[name] = "ひかりのねんど"
 
-        if "めいそう" in chosen_moves or "わるだくみ" in chosen_moves:
-            adj_nature_weights["ひかえめ"] = max(adj_nature_weights.get("ひかえめ", 1.0), 5.0)
-            adj_nature_weights["おくびょう"] = max(adj_nature_weights.get("おくびょう", 1.0), 5.0)
-            if "マルチスケイル" in zukan_entry.get("ability", []):
-                adj_ability_weights["マルチスケイル"] = 5.0
+        if "ステルスロック" in chosen_moves or "あくび" in chosen_moves:
+            if "すなおこし" in zukan_entry.get("ability", []):
+                adj_ability_weights["すなおこし"] = 5.0
 
-        if "なまける" in chosen_moves or "じこさいせい" in chosen_moves or "やどりぎのタネ" in chosen_moves:
-            adj_nature_weights["ずぶとい"] = max(adj_nature_weights.get("ずぶとい", 1.0), 4.0)
-            adj_nature_weights["わんぱく"] = max(adj_nature_weights.get("わんぱく", 1.0), 4.0)
-            adj_nature_weights["しんちょう"] = max(adj_nature_weights.get("しんちょう", 1.0), 4.0)
-            adj_nature_weights["おだやか"] = max(adj_nature_weights.get("おだやか", 1.0), 4.0)
-            if "てんねん" in zukan_entry.get("ability", []):
-                adj_ability_weights["てんねん"] = 5.0
-            if "さいせいりょく" in zukan_entry.get("ability", []):
-                adj_ability_weights["さいせいりょく"] = 5.0
-        """
-
-        # 性格の最終決定
         natures = list(self.NATURE_WEIGHTS.keys())
         nature_weights = []
         for nat in natures:
             static_w = self.NATURE_WEIGHTS[nat]
             dynamic_w = dyn_data.get("natures", {}).get(nat, 1.0)
             synergy_w = adj_nature_weights.get(nat, 1.0)
+
+            # 物理・特殊アタッカーの「ねじれデメリット性格」を完全に排除
+            if has_physical_attack and not has_special_attack:
+                if nat in ["ひかえめ", "おくびょう", "ずぶとい", "おだやか"]:
+                    static_w = 0.0
+            if has_special_attack and not has_physical_attack:
+                if nat in ["いじっぱり", "ようき", "わんぱく", "しんちょう"]:
+                    static_w = 0.0
+
             nature_weights.append(static_w * dynamic_w * synergy_w)
+
+        if sum(nature_weights) <= 0:
+            nature_weights = [1.0] * len(natures)
         nature = random.choices(natures, weights=nature_weights, k=1)[0]
 
         # 特性の最終決定
         abilities = zukan_entry.get("ability", ["とくせいなし"])
 
-        # 🌟 メタモン専用：8割の確率で「かわりもの」、2割でその他の特性（じゅうなん等）を確定選択
+        # メタモン専用特性ロック
         if name == "メタモン" and "かわりもの" in abilities:
             if random.random() < 0.8:
                 ability = "かわりもの"
@@ -583,65 +622,63 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
         else:
             ability = "とくせいなし"
 
-        # 🌟 D. [持ち物選定における弱点・攻撃技タイプ適合フィルター]
-        assigned_item = ""
-        mega_stone_name = name.split("(")[0] + "knight"  # メガストーン判定用
+        # 🌟 持ち物適合選定
+        if name not in assigned_items:
+            assigned_item = ""
+            mega_candidates = get_possible_mega_stones(name)
+            valid_mega_stones = [stone for stone in mega_candidates if stone in self.mb_items]
 
-        # 本物のWiki/DB定義メガストーン名を取得
-        mega_candidates = get_possible_mega_stones(name)
-        valid_mega_stones = [stone for stone in mega_candidates if stone in self.mb_items]
+            if valid_mega_stones and random.random() < self.MEGA_PROBABILITIES.get(name, 0.50):
+                assigned_item = random.choice(valid_mega_stones)
+            else:
+                available_items = [itm for itm in normal_items_pool if itm not in assigned_items.values()]
+                if available_items:
+                    local_item_tiers = dict(self.ITEM_TIERS)
 
-        if valid_mega_stones and random.random() < self.MEGA_PROBABILITIES.get(name, 0.50):
-            assigned_item = random.choice(valid_mega_stones)
-        else:
-            available_items = [itm for itm in normal_items_pool if itm not in assigned_items.values()]
-            if available_items:
-                local_item_tiers = dict(self.ITEM_TIERS)
+                    # 天候岩および粘土の動的ブースト
+                    if "ひでり" in ability: local_item_tiers["あついいわ"] = 5.0
+                    if "あめふらし" in ability: local_item_tiers["しめったいわ"] = 5.0
+                    if "すなおこし" in ability: local_item_tiers["さらさらいわ"] = 5.0
+                    if "ゆきふらし" in ability: local_item_tiers["つめたいいわ"] = 5.0
+                    if name.split("(")[0] in self.WALL_SETTER_POKEMON:
+                        local_item_tiers["ひかりのねんど"] = 5.0
 
-                # 天候岩および粘土の動的ブースト
-                if "ひでり" in ability: local_item_tiers["あついいわ"] = 5.0
-                if "あめふらし" in ability: local_item_tiers["しめったいわ"] = 5.0
-                if "すなおこし" in ability: local_item_tiers["さらさらいわ"] = 5.0
-                if "ゆきふらし" in ability: local_item_tiers["つめたいいわ"] = 5.0
-                if name.split("(")[0] in self.WALL_SETTER_POKEMON:
-                    local_item_tiers["ひかりのねんど"] = 5.0
+                    pokemon_ttype = zukan_entry["type"][0]
+                    attack_types = set()
+                    for mv in chosen_moves:
+                        mv_data = Pokemon.all_moves.get(mv, {})
+                        if mv_data and not mv_data.get("class", "").startswith("sta"):
+                            true_type = get_true_move_type(mv, ability, pokemon_ttype)
+                            attack_types.add(true_type)
 
-                pokemon_ttype = zukan_entry["type"][0]
-                attack_types = set()
-                for mv in chosen_moves:
-                    mv_data = Pokemon.all_moves.get(mv, {})
-                    if mv_data and not mv_data.get("class", "").startswith("sta"):
-                        true_type = get_true_move_type(mv, ability, pokemon_ttype)
-                        attack_types.add(true_type)
+                    item_weights = []
+                    for itm in available_items:
+                        weight = local_item_tiers.get(itm, 0.1)
+                        if itm in TYPE_BOOSTING_ITEMS:
+                            req_type = TYPE_BOOSTING_ITEMS[itm]
+                            if req_type not in attack_types:
+                                weight = 0.0
 
-                item_weights = []
-                for itm in available_items:
-                    weight = local_item_tiers.get(itm, 0.1)
-                    if itm in TYPE_BOOSTING_ITEMS:
-                        req_type = TYPE_BOOSTING_ITEMS[itm]
-                        if req_type not in attack_types:
-                            weight = 0.0
+                        # 半減実弱点適合フィルター
+                        if itm in TYPE_REDUCING_BERRIES:
+                            req_type = TYPE_REDUCING_BERRIES[itm]
+                            is_weak = False
+                            if req_type in Pokemon.type_id:
+                                atk_id = Pokemon.type_id[req_type]
+                                eff = 1.0
+                                for def_type in zukan_entry.get("type", []):
+                                    if def_type in Pokemon.type_id:
+                                        def_id = Pokemon.type_id[def_type]
+                                        eff *= Pokemon.type_corrections[atk_id][def_id]
+                                if eff > 1.0:
+                                    is_weak = True
+                            if not is_weak:
+                                weight = 0.0
 
-                    # 🌟 【新規仕様】半減実の場合、自身がその属性を弱点（抜群）として持っていなければ完全に除外
-                    if itm in TYPE_REDUCING_BERRIES:
-                        req_type = TYPE_REDUCING_BERRIES[itm]
-                        is_weak = False
-                        if req_type in Pokemon.type_id:
-                            atk_id = Pokemon.type_id[req_type]
-                            eff = 1.0
-                            for def_type in zukan_entry.get("type", []):
-                                if def_type in Pokemon.type_id:
-                                    def_id = Pokemon.type_id[def_type]
-                                    eff *= Pokemon.type_corrections[atk_id][def_id]
-                            if eff > 1.0:
-                                is_weak = True
-                        if not is_weak:
-                            weight = 0.0
+                        item_weights.append(weight)
 
-                    item_weights.append(weight)
-
-                if sum(item_weights) <= 0:
-                    item_weights = [1.0] * len(available_items)
+                    if sum(item_weights) <= 0:
+                        item_weights = [1.0] * len(available_items)
 
                     assigned_item = random.choices(available_items, weights=item_weights, k=1)[0]
 
@@ -894,6 +931,27 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
             my_strategy, _ = cfr_solver.solve(pbs, battle)
 
             if my_strategy:
+                # 🧠 AIの混合戦略（ナッシュ均衡思想）をコンソールに出力
+                print(f"\n   🧠 [ターン {battle.turn}] プレイヤー {pl} ({battle.pokemon[pl].name}) の思考:")
+                for action, prob in sorted(my_strategy.items(), key=lambda x: -x[1]):
+                    action_name = str(action)
+                    if isinstance(action, int):
+                        if action in range(20, 26):
+                            target_idx = action - 20
+                            try:
+                                target_name = battle.selected[pl][target_idx].name
+                                action_name = f"交代 ➔ {target_name}"
+                            except:
+                                action_name = f"交代(インデックス {target_idx})"
+                        else:
+                            move_idx = action % 10
+                            try:
+                                move_name = battle.pokemon[pl].moves[move_idx]
+                                action_name = f"技: {move_name}"
+                            except:
+                                action_name = f"技スロット {move_idx}"
+                    print(f"     ┗ {action_name:<18}: {prob * 100:.1%}")
+
                 actions = list(my_strategy.keys())
                 probs = list(my_strategy.values())
 
@@ -1148,6 +1206,64 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
 # =========================================================================
 if __name__ == "__main__":
     Pokemon.init(season=22)
+
+    # =========================================================================
+    # 🌟 【修正版】Battle.change_pokemon 引数競合回避・安全防止パッチ
+    # =========================================================================
+    original_change_pokemon = Battle.change_pokemon
+
+    def patched_change_pokemon(self, player, command=None, idx=0, landing=False, *args, **kwargs):
+        """
+        CFR初期化時や交代コマンド誤認による [-20] などのアクセスエラーを防止しつつ、
+        オリジナルメソッドの引数シグネチャ(command, idx, landing)を正しく保持して呼び出します。
+        """
+        cmd = self.command[player] if (self.command and player < len(self.command)) else None
+
+        # A. 交代コマンド（20〜25）が正しくセットされている場合のみインデックス計算を行う
+        if cmd is not None and isinstance(cmd, int) and 20 <= cmd <= 25:
+            idx_to_use = cmd - 20
+        else:
+            idx_to_use = idx
+
+        # B. 選出数（3体）に対する境界値チェック
+        party_len = len(self.selected[player]) if (self.selected and player < len(self.selected)) else 0
+        if party_len > 0:
+            if idx_to_use >= party_len or idx_to_use < 0:
+                idx_to_use = 0
+        else:
+            idx_to_use = 0
+
+        # C. 期待する交代先をアクティブ枠に事前設定
+        if party_len > 0 and self.pokemon and player < len(self.pokemon):
+            self.pokemon[player] = self.selected[player][idx_to_use]
+
+        # D. 不正なコマンド値が設定されている場合の退避処理
+        has_invalid_cmd = False
+        old_cmd_val = None
+        if self.command and player < len(self.command):
+            curr_cmd = self.command[player]
+            if curr_cmd is not None and (not isinstance(curr_cmd, int) or not (20 <= curr_cmd <= 25)):
+                old_cmd_val = curr_cmd
+                self.command[player] = None
+                has_invalid_cmd = True
+
+        try:
+            # 交代コマンド実引数を完全にバインドした状態を維持してフォワード呼び出し
+            return original_change_pokemon(
+                self,
+                player=player,
+                command=command,
+                idx=idx_to_use,
+                landing=landing,
+                *args,
+                **kwargs
+            )
+        finally:
+            if has_invalid_cmd and self.command and player < len(self.command):
+                self.command[player] = old_cmd_val
+
+    Battle.change_pokemon = patched_change_pokemon
+    print("ℹ️ [Aegis Patch] Battle.change_pokemon インデックスエラー安全防止パッチ(引数マッピング修正済)を適用しました。")
 
     original_find = Pokemon.find
 
