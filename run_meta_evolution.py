@@ -297,8 +297,7 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
                 max_total_score = total_score
                 best_candidate = candidate
 
-        # 🌟 [ハング防止ガード] 万が一スコア判定で最適な候補が見つからなかった（=-999.0を上回れない）場合、
-        # 既存メンバーと名前が重複しない候補をランダムに選んで強制突破し、無限ループを100%防止します。
+        # 🌟 [ハング防止ガード] 無限ループ防止
         if best_candidate:
             team_members.append(best_candidate)
         else:
@@ -317,7 +316,7 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
     TYPE_BOOSTING_ITEMS = {
         "メタルコート": "はがね", "きせきのタネ": "くさ", "もくたん": "ほのお",
         "しんぴのしずく": "みず", "シルクのスカーフ": "ノーマル", "するどいくちばし": "ひこう",
-        "ぎんのこな": "むし", "じしゃく": "でんき", "かたいいし": "いわ",
+        "ぎんのこな": "むし", "じしゃく": "でんき", "かたいたし": "いわ",
         "のろいのおふだ": "ゴースト", "りゅうのキバ": "ドラゴン", "どくばり": "どく",
         "やわらかいすな": "じめん", "くろいメガネ": "あく", "くろおび": "かくとう",
         "とけないこおり": "こおり", "まがったスプーン": "エスパー", "ようせいのハネ": "フェアリー"
@@ -975,6 +974,7 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
                 normalized_strategy = {act: (val / strat_sum) for act, val in my_strategy.items()}
 
                 # 🧠 AIの混合戦略（思考）をリアルタイムに可視化表示（確率正規化修正完了版）
+                # 🌟 [一時的コメントアウト対応] 画面ログの出力を停止する場合のみ、以下のprint行をコメントアウトしてください。
                 # print(f"\n   🧠 [ターン {battle.turn}] プレイヤー {pl} ({battle.pokemon[pl].name}) の思考:")
                 formatted_strat = {}
                 for action, prob in sorted(normalized_strategy.items(), key=lambda x: -x[1]):
@@ -994,7 +994,7 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
                                 action_name = f"move_{move_name}"
                             except:
                                 action_name = f"move_slot_{move_idx}"
-                    # 🌟 [バグ修正] すでに100倍に正規化したため、フォーマットは :.1% (自動で100倍にする) のみを使用
+                    # 🌟 [一時的コメントアウト対応] 画面ログの出力を停止する場合のみ、以下のprint行をコメントアウトしてください。
                     # print(f"     ┗ {action_name:<18}: {prob:.1%}")
                     formatted_strat[action_name] = round(prob, 4)
                 turn_strategies[pl] = formatted_strat
@@ -1016,7 +1016,9 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
 
                 commands[pl] = random.choices(actions, weights=probs, k=1)[0]
             else:
-                commands[pl] = random.choice(battle.available_commands(pl))
+                # 🌟 [修正] 交代候補がない瀕死などの極限状態での IndexError 回避ガードを配置
+                avail = battle.available_commands(pl)
+                commands[pl] = random.choice(avail) if avail else None
 
         battle.command = commands
         battle.proceed(commands=commands)
@@ -1213,6 +1215,7 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
             if len(sorted_meta) >= rank:
                 top_poke_name = sorted_meta[rank - 1][0]
                 try:
+                    # 🌟 警告解消：未定義だった weights ➔ 正しいスコープの pokemon_weights へ修正
                     rank_party = builder.build_team(top_poke_name, pokemon_weights=pokemon_weights)
 
                     rank_path = f"log/party_gen{gen}_rank{rank}.json"
@@ -1249,7 +1252,6 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
         print(f"==================================================\n")
 
     print(f"\n🏁 {total_generations}世代すべての進化学習サイクルが正常に完了しました。")
-
 
 # =========================================================================
 # 7. エントリーポイント
@@ -1332,9 +1334,162 @@ if __name__ == "__main__":
 
 
     Battle.change_pokemon = patched_change_pokemon
-    print(
-        "ℹ️ [Aegis Patch] Battle.change_pokemon インデックスエラー安全防止パッチ(引数マッピング修正済)を適用しました。")
+    print("ℹ️ [Aegis Patch] Battle.change_pokemon インデックスエラー安全防止パッチ(引数マッピング修正済)を適用しました。")
 
+
+    # =========================================================================
+    # 🚀 [Aegis Deepcopy Optimization Patch]
+    # =========================================================================
+    def patched_battle_deepcopy(self, memo):
+        if id(self) in memo:
+            return memo[id(self)]
+
+        cls = self.__class__
+        new_battle = cls.__new__(cls)
+        memo[id(self)] = new_battle
+
+        # コピー対象外とする危険・不要な属性（巨大データベースやニューラルネットワークなど）
+        skip_keys = {
+            'solver', 'value_network', 'nn', 'model', 'w2v_model',
+            'analyzer', 'builder', 'beliefs', 'pbs'
+        }
+        skip_class_names = {
+            'ReBeLValueNetwork', 'CFRSolver', 'AegisTeamBuilder',
+            'AegisAnalyzer', 'Word2Vec', 'PokemonBeliefState', 'PublicBeliefState'
+        }
+
+        # 属性をフィルタリングしながらコピー
+        for k, v in self.__dict__.items():
+            if k in skip_keys:
+                continue
+            if v.__class__.__name__ in skip_class_names:
+                continue
+            if hasattr(v, '__class__') and ('torch' in v.__class__.__module__ or 'rebel' in v.__class__.__module__):
+                continue
+            if isinstance(v, (types.ModuleType, types.FunctionType, types.MethodType, types.BuiltinFunctionType)):
+                continue
+
+            try:
+                setattr(new_battle, k, deepcopy(v, memo))
+            except Exception:
+                # コピー不可能なオブジェクトは浅い参照として維持
+                setattr(new_battle, k, v)
+
+        # 複製されたPokemonインスタンスに対する新しいBattleオブジェクトへの相互参照（バックレファレンス）を再構築
+        if hasattr(new_battle, 'pokemon') and new_battle.pokemon:
+            for p in new_battle.pokemon:
+                if p:
+                    for attr in ['battle', '_battle', 'current_battle']:
+                        if hasattr(p, attr):
+                            setattr(p, attr, new_battle)
+
+        if hasattr(new_battle, 'selected') and new_battle.selected:
+            for side in new_battle.selected:
+                if side:
+                    for p in side:
+                        if p:
+                            for attr in ['battle', '_battle', 'current_battle']:
+                                if hasattr(p, attr):
+                                    setattr(p, attr, new_battle)
+
+        return new_battle
+
+
+    def patched_pokemon_deepcopy(self, memo):
+        if id(self) in memo:
+            return memo[id(self)]
+
+        cls = self.__class__
+        new_poke = cls.__new__(cls)
+        memo[id(self)] = new_poke
+
+        # 相互参照の無限ループを防ぐため、Battleインスタンスへの直参照はここではスキップ（親のBattle側で再リンク）
+        avoid_keys = {'battle', '_battle', 'current_battle'}
+
+        for k, v in self.__dict__.items():
+            if k in avoid_keys:
+                continue
+
+            # 不変（Immutable）な型は直接代入してオーバーヘッドを排除
+            if isinstance(v, (str, int, float, bool, type(None))):
+                new_poke.__dict__[k] = v
+            elif isinstance(v, list):
+                # 技構成や努力値などの単純なリストは高速走査
+                new_poke.__dict__[k] = [
+                    deepcopy(item, memo) if not isinstance(item, (str, int, float, bool, type(None))) else item
+                    for item in v
+                ]
+            elif isinstance(v, dict):
+                # 状態異常やバフ・デバフなどのステータス辞書
+                new_dict = {}
+                for dk, dv in v.items():
+                    new_dk = deepcopy(dk, memo) if not isinstance(dk, (str, int, float, bool, type(None))) else dk
+                    new_dv = deepcopy(dv, memo) if not isinstance(dv, (str, int, float, bool, type(None))) else dv
+                    new_dict[new_dk] = new_dv  # 👈 こちらに修正（シンプルに new_dv を代入）
+                new_poke.__dict__[k] = new_dict
+            elif isinstance(v, set):
+                new_poke.__dict__[k] = {
+                    deepcopy(item, memo) if not isinstance(item, (str, int, float, bool, type(None))) else item
+                    for item in v
+                }
+            else:
+                try:
+                    new_poke.__dict__[k] = deepcopy(v, memo)
+                except Exception:
+                    new_poke.__dict__[k] = v
+
+        return new_poke
+
+
+    # モンキーパッチの適用
+    Battle.__deepcopy__ = patched_battle_deepcopy
+    Pokemon.__deepcopy__ = patched_pokemon_deepcopy
+    print("ℹ️ [Aegis Patch] Battle and Pokemon customized __deepcopy__ optimization applied.")
+
+
+    # =========================================================================
+    # 🌟 【修正版】Battle.available_commands テラスタルコマンド（40-43）除外パッチ
+    # =========================================================================
+    original_available_commands = Battle.available_commands
+
+
+    def patched_available_commands(self, player, *args, **kwargs):
+        """
+        レギュレーションM-B（テラスタル禁止環境）に完全適合させるため、
+        元のシグネチャを完全に維持（phase引数などの名前衝突を回避）したまま、
+        40〜43番のテラスタルコマンドのみを候補から物理的に排除します。
+        """
+        cmds = original_available_commands(self, player, *args, **kwargs)
+        return [c for c in cmds if c not in range(40, 44)]
+
+
+    Battle.available_commands = patched_available_commands
+    print("ℹ️ [Aegis Patch] Battle.available_commands テラスタル排除パッチ(引数マッピング互換)を適用しました。")
+
+
+    # =========================================================================
+    # 🌟 【新規追加：Battle.battle_command 内部ランダムエラー防止パッチ】
+    # =========================================================================
+    original_battle_command = Battle.battle_command
+
+
+    def patched_battle_command(self, player, *args, **kwargs):
+        """
+        シミュレータ内部で解決コマンドが空になった際、random.choice が IndexError を起こすのを防止します。
+        """
+        cmds = self.available_commands(player)
+        if cmds:
+            return random.choice(cmds)
+        return None  # 選択肢がない場合は安全に None を返す
+
+
+    Battle.battle_command = patched_battle_command
+    print("ℹ️ [Aegis Patch] Battle.battle_command 内部安全パッチを適用しました。")
+
+
+    # =========================================================================
+    # 🌟 【その他補正パッチ群】
+    # =========================================================================
     original_find = Pokemon.find
 
 
@@ -1383,7 +1538,6 @@ if __name__ == "__main__":
     Battle.get_mega_name = patched_get_mega_name
 
     # C. 【Battle.proceed 技インデックス限界突破＆空スロット完全防止パッチ】
-    # C. 【Battle.proceed 技インデックス限界突破＆空スロット完全防止パッチ】
     original_proceed = Battle.proceed
 
 
@@ -1394,9 +1548,6 @@ if __name__ == "__main__":
             for player in range(2):
                 p = self.pokemon[player]
                 if p and p.hp > 0:
-                    # 🌟 [動的リアル技再サンプリング仕様]
-                    # ゲッターコピーによるフリーズを防ぎつつ、技が4つ未満の場合は、
-                    # 図鑑データから覚えられる技をランダムに重複なしで抽出してスロットを埋め尽くす
                     temp_moves = list(p.moves) if hasattr(p, 'moves') and p.moves else []
 
                     if not temp_moves:
@@ -1404,31 +1555,25 @@ if __name__ == "__main__":
 
                     is_modified = False
                     if len(temp_moves) < 4:
-                        # 本物の習得可能リストを特定（mb_learnset防から）
                         pokemon_name = p.name
                         learnable_moves = Pokemon.learnsets.get(pokemon_name, ["わるあがき"])
 
-                        # すでに覚えている技以外の候補を抽出
                         extra_pool = [m for m in learnable_moves if m not in temp_moves]
                         needed = 4 - len(temp_moves)
 
                         if extra_pool:
-                            # 残りスロット分をランダムに重複なしサンプリングして追加
                             extra_moves = random.sample(extra_pool, min(needed, len(extra_pool)))
                             temp_moves.extend(extra_moves)
                             is_modified = True
 
-                        # それでも4つに満たない（元々覚えられる技が極端に少ない）場合のみ、わるあがきで埋める
                         while len(temp_moves) < 4:
                             temp_moves.append("わるあがき")
                             is_modified = True
 
-                    # 技リストに変更があった場合のみ、本体に再代入して update_status を同期
                     if is_modified:
                         try:
                             p.moves = temp_moves
                         except AttributeError:
-                            # プロパティにセッターが無い場合、名前修飾されたプライベート変数へ直接書き込みを行う
                             p._Pokemon__moves = temp_moves
                         p.update_status()
 
@@ -1436,7 +1581,6 @@ if __name__ == "__main__":
                     if cmd is not None:
                         if cmd not in range(20, 26):
                             move_idx = cmd % 10
-                            # 技スロットの範囲外アクセスを検知した場合は、強制的に0番目のスロットにクランプ
                             if move_idx >= len(p.moves):
                                 fallback_idx = 0
                                 base_offset = (cmd // 10) * 10
@@ -1453,4 +1597,5 @@ if __name__ == "__main__":
             Pokemon.all_moves['キングシールド'] = Pokemon.all_moves[target_alias]
             break
 
+    # 進化ループの実行
     run_evolution_loop(total_generations=1000, matches_per_gen=40)
