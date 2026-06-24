@@ -194,6 +194,7 @@ class Pokebot(Battle):
     templ_conditions = {}
     conditions, limited_conditions, countable_conditions = [], [], []
 
+    @staticmethod
     def init():
         # ログ用のディレクトリ
         os.makedirs('log/battle/', exist_ok=True)
