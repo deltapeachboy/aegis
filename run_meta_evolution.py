@@ -15,12 +15,19 @@ from collections import Counter
 from pathlib import Path
 
 # =========================================================================
-# 0. 【File Path Redirect & Aegislash Data Patch (絶対位置対応版)】
+# 0. 【File Path Redirect & Aegislash Data Patch (絶対位置対応・端末差強制クリア版)】
 # =========================================================================
 _original_open = builtins.open
 
 
 def patched_open(file, *args, **kwargs):
+    # 🌟【端末差完全解決ガード】
+    # 読み込みモード("r" または "rt")で開く際、文字コードが指定されていなければ
+    # 強制的に encoding="utf-8" を付与して開き、Windows等の環境差によるUnicodeDecodeErrorを100%防止します。
+    mode = args[0] if len(args) > 0 else kwargs.get("mode", "r")
+    if "r" in mode and "encoding" not in kwargs:
+        kwargs["encoding"] = "utf-8"
+
     if isinstance(file, str) and "learnset.json" in file:
         base_dir = os.path.dirname(os.path.abspath(__file__))
         custom_path = os.path.join(base_dir, "battle_data", "mb_learnset.json")
@@ -711,7 +718,7 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
             if available_items:
                 local_item_tiers = dict(self.ITEM_TIERS)
 
-                # 天候岩および粘土 of 動的ブースト
+                # 天候岩および粘土の動的ブースト
                 if "ひでり" in ability: local_item_tiers["あついいわ"] = 5.0
                 if "あめふらし" in ability: local_item_tiers["しめったいわ"] = 5.0
                 if "すなおこし" in ability: local_item_tiers["さらさらいわ"] = 5.0
@@ -735,7 +742,7 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
                         if req_type not in attack_types:
                             weight = 0.0
 
-                    # 半減実弱点適合フィルター
+                    # 半減実弱点適合フィルター (最外周で正しく並列配置)
                     elif itm in TYPE_REDUCING_BERRIES:
                         req_type = TYPE_REDUCING_BERRIES[itm]
                         is_weak = False
@@ -1147,11 +1154,16 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
                 commands[pl] = random.choice(avail) if avail else None
 
         battle.command = commands
-        battle.proceed(commands=commands)
+        # 進行を実行 (サニタイズ後のコマンドが battle.command に設定されて実行されます)
+        battle.proceed(commands)
+
+        # 🌟【根本解決】サニタイズ適用後に実際にシミュレータ上で実行された
+        # クリーンなコマンド（battle.command）を取得して履歴にバインドします
+        actual_commands = battle.command if battle.command else commands
 
         history_log.append({
             "turn": battle.turn,
-            "commands": commands,
+            "commands": actual_commands,  # 🌟 サニタイズ後のクリーンなコマンドを記録
             "hp": [battle.pokemon[0].hp, battle.pokemon[1].hp] if all(battle.pokemon) else [0, 0],
             "strategies": turn_strategies
         })
@@ -1262,7 +1274,7 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
                         selection_predictor=selection_predictor
                     )
                     f_out.write(json.dumps(match_data, ensure_ascii=False) + "\n")
-                    f_out.flush()  # 即時書き出しを強制して中断時のデータ破損（0バイト）を完全防止
+                    f_out.flush()  # 🌟 即時書き出しを強制して中断時のデータ破損（0バイト）を完全防止
                 except Exception as e:
                     import traceback
                     traceback.print_exc()
@@ -1572,25 +1584,31 @@ if __name__ == "__main__":
                 if k in avoid_keys:
                     continue
 
-                if isinstance(v, (str, int, float, bool, type(None))):
+                # 🌟 【超高速化】プリミティブ型はそのまま代入（deepcopyを呼ばない）
+                if v is None or isinstance(v, (int, float, str, bool)):
                     new_poke.__dict__[k] = v
                 elif isinstance(v, list):
-                    new_poke.__dict__[k] = [
-                        deepcopy(item, memo) if not isinstance(item, (str, int, float, bool, type(None))) else item
-                        for item in v
-                    ]
+                    # リストの中身がプリミティブなら、内包表記で高速コピー
+                    if all(isinstance(x, (int, float, str, bool, type(None))) for x in v):
+                        new_poke.__dict__[k] = list(v)
+                    else:
+                        new_poke.__dict__[k] = [deepcopy(item, memo) for item in v]
                 elif isinstance(v, dict):
-                    new_dict = {}
-                    for dk, dv in v.items():
-                        new_dk = deepcopy(dk, memo) if not isinstance(dk, (str, int, float, bool, type(None))) else dk
-                        new_dv = deepcopy(dv, memo) if not isinstance(dv, (str, int, float, bool, type(None))) else dv
-                        new_dict[new_dk] = new_dv
-                    new_poke.__dict__[k] = new_dict
+                    # 辞書の中身がプリミティブなら、高速コピー
+                    if all(isinstance(dk, (int, float, str, bool)) and isinstance(dv, (int, float, str, bool, type(None))) for dk, dv in v.items()):
+                        new_poke.__dict__[k] = dict(v)
+                    else:
+                        new_dict = {}
+                        for dk, dv in v.items():
+                            new_dk = deepcopy(dk, memo) if not isinstance(dk, (str, int, float, bool, type(None))) else dk
+                            new_dv = deepcopy(dv, memo) if not isinstance(dv, (str, int, float, bool, type(None))) else dv
+                            new_dict[new_dk] = new_dv
+                        new_poke.__dict__[k] = new_dict
                 elif isinstance(v, set):
-                    new_poke.__dict__[k] = {
-                        deepcopy(item, memo) if not isinstance(item, (str, int, float, bool, type(None))) else item
-                        for item in v
-                    }
+                    if all(isinstance(x, (int, float, str, bool, type(None))) for x in v):
+                        new_poke.__dict__[k] = set(v)
+                    else:
+                        new_poke.__dict__[k] = {deepcopy(item, memo) for item in v}
                 else:
                     try:
                         new_poke.__dict__[k] = deepcopy(v, memo)
@@ -1605,89 +1623,93 @@ if __name__ == "__main__":
         Battle._aegis_deepcopy_patched = True
         print("ℹ️ [Aegis Patch] Battle and Pokemon customized __deepcopy__ optimization applied.")
 
-    # =========================================================================
-    # 🌟 Battle.available_commands テラスタル排除 ＆ 瀕死交代完全排除フィルタ
-    # =========================================================================
-    if not hasattr(Battle, '_aegis_available_commands_patched3'):
-        original_available_commands = Battle.available_commands
+        # =========================================================================
+        # Battle.available_commands テラスタル（10-13）排除 ＆ 瀕死交代完全排除フィルタ
+        # =========================================================================
+        if not hasattr(Battle, '_aegis_available_commands_patched3'):
+            original_available_commands = Battle.available_commands
 
 
-        def patched_available_commands(self, player, *args, **kwargs):
-            """
-            レギュレーションM-B（テラスタル禁止環境）適合に加え、
-            シミュレータ本来のバグである「瀕死のポケモンへの交代コマンド(20〜25)」を
-            合法手リストから物理的に完全に排除します。
+            def patched_available_commands(self, player, *args, **kwargs):
+                """
+                レギュレーションM-B（テラスタル禁止環境）に適合させるため、10〜13番のテラスタルコマンドを排除します。
 
-            これにより、CFRソルバーやランダムフォールバックが、
-            そもそも『不正な交代』を脳内評価・選択すること自体を根本から防止します。
-            """
-            import warnings
+                🌟【根本解決】シミュレータ本来のバグである「瀕死のポケモンへの交代コマンド(20〜25)」を
+                CFRソルバーやランダムフォールバックの選択肢（利用可能手リスト）から、最初から物理的に完全に排除します。
+                これにより、AIが不正な交代手を脳内評価・生出力すること自体を上流で完全に防ぎます。
+                """
+                import warnings
 
-            # オリジナルの呼び出し時に発生する "No available commands" 警告のみを一時的に非表示にする
-            with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", category=UserWarning, message=".*No available commands.*")
-                cmds = original_available_commands(self, player, *args, **kwargs)
+                # オリジナルの呼び出し時に発生する "No available commands" 警告のみを一時的に非表示にする
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", category=UserWarning, message=".*No available commands.*")
+                    cmds = original_available_commands(self, player, *args, **kwargs)
 
-            player_int = int(player)
-            party = self.selected[player_int] if (self.selected and player_int < len(self.selected)) else []
-            p_active = self.pokemon[player_int] if (self.pokemon and player_int < len(self.pokemon)) else None
+                filtered_cmds = [c for c in cmds if c not in range(10, 14)]
 
-            # 🌟 【クレンジング】テラスタル除外 ＆ 瀕死への交代コマンドの完全排除
-            cleaned_cmds = []
-            for c in cmds:
-                if c in range(10, 14):  # テラスタル除外
-                    continue
-                if 20 <= c <= 25:  # 交代コマンドの検証
-                    target_idx = c - 20
-                    if target_idx >= len(party):
-                        continue  # 範囲外除外
-                    target_poke = party[target_idx]
-                    # 交代先が自分自身、またはすでに瀕死（HP <= 0）の場合は選択肢から完全に抹殺
-                    if target_poke == p_active or target_poke.hp <= 0:
-                        continue
-                cleaned_cmds.append(c)
+                # 🌟 瀕死の控えへの交代コマンド(20〜25)を無条件で排除
+                player_int = int(player)
+                party = self.selected[player_int] if (self.selected and player_int < len(self.selected)) else []
+                p_active = self.pokemon[player_int] if (self.pokemon and player_int < len(self.pokemon)) else None
 
-            filtered_cmds = cleaned_cmds
+                cleaned_cmds = []
+                for c in filtered_cmds:
+                    if 20 <= c <= 25:
+                        target_idx = c - 20
+                        if target_idx >= len(party):
+                            continue  # 範囲外除外
+                        target_poke = party[target_idx]
+                        # 交代先が自分自身、またはすでに瀕死（HP <= 0）の場合は選択肢から完全に抹殺
+                        if target_poke == p_active or target_poke.hp <= 0:
+                            continue
+                    cleaned_cmds.append(c)
 
-            if not filtered_cmds:
-                if p_active and p_active.hp > 0:
-                    phase = "battle"
-                    if len(args) > 0:
-                        phase = args[0]
-                    elif "phase" in kwargs:
-                        phase = kwargs["phase"]
+                filtered_cmds = cleaned_cmds
 
-                    alive_benches = [pb.name for pb in party if pb.hp > 0 and pb != p_active]
-                    active_conditions = [k for k, v in getattr(p_active, 'condition', {}).items() if v > 0]
+                if not filtered_cmds:
+                    if p_active and p_active.hp > 0:
+                        phase = "battle"
+                        if len(args) > 0:
+                            phase = args[0]
+                        elif "phase" in kwargs:
+                            phase = kwargs["phase"]
 
-                    if phase == "battle" or (phase == "change" and len(alive_benches) > 0):
-                        print(f"\n🚨 [Aegis Available Commands Debug] --- 警告発生時の戦況診断ダンプ ---")
-                        print(f"  - プレイヤー   : Player {player_int}")
-                        print(f"  - フェーズ     : {phase}")
-                        print(f"  - ポケモン     : {p_active.name} (HP: {p_active.hp}/{p_active.status[0]})")
-                        print(f"  - 技スロット   : {getattr(p_active, 'moves', 'N/A')}")
-                        print(f"  - 各技残りPP   : {getattr(p_active, 'pp', 'N/A')}")
-                        print(f"  - 状態変化     : {active_conditions if active_conditions else 'なし'}")
-                        print(f"  - 控えの生存者 : {alive_benches if alive_benches else 'なし (タイマン状態)'}")
-                        print("-" * 60 + "\n")
+                        alive_benches = [pb.name for pb in party if pb.hp > 0 and pb != p_active]
+                        active_conditions = [k for k, v in getattr(p_active, 'condition', {}).items() if v > 0]
 
-                    # 生存している安全な控えを再計算
-                    switch_cmds = []
-                    for idx_temp, poke_bench in enumerate(party):
-                        if poke_bench.hp > 0 and poke_bench != p_active:
-                            switch_cmds.append(20 + idx_temp)
+                        # 真に異常なコマンド枯渇（技選択時の空、または控えがいるのに交代先がない異常）のみ出力
+                        if phase == "battle" or (phase == "change" and len(alive_benches) > 0):
+                            print(f"\n🚨 [Aegis Available Commands Debug] --- 警告発生時の戦況診断ダンプ ---")
+                            print(f"  - プレイヤー   : Player {player_int}")
+                            print(f"  - フェーズ     : {phase}")
+                            print(f"  - ポケモン     : {p_active.name} (HP: {p_active.hp}/{p_active.status[0]})")
+                            print(f"  - 技スロット   : {getattr(p_active, 'moves', 'N/A')}")
+                            print(f"  - 各技残りPP   : {getattr(p_active, 'pp', 'N/A')}")
+                            print(
+                                f"  - 状態異常/眠り: {getattr(p_active, 'ailment', 'None')} (睡眠ターン数: {getattr(p_active, 'sleep_count', 0)})")
+                            print(f"  - 状態変化     : {active_conditions if active_conditions else 'なし'}")
+                            print(f"  - 持ち物       : {p_active.item if p_active.item else 'なし（または消費済み）'}")
+                            print(f"  - こだわり状態 : {getattr(p_active, 'fixed_move', 'なし')}")
+                            print(f"  - 控えの生存者 : {alive_benches if alive_benches else 'なし (タイマン状態)'}")
+                            print(f"  🚨 診断判定: 【要注意】行動選択フェーズ、または控えがいるのにコマンドが空です。")
+                            print("-" * 60 + "\n")
 
-                    if switch_cmds:
-                        filtered_cmds = switch_cmds
-                    else:
-                        filtered_cmds = [0]  # 通常技0（わるあがき）にフォールバック
+                        switch_cmds = []
+                        for idx_temp, poke_bench in enumerate(party):
+                            if poke_bench.hp > 0 and poke_bench != p_active:
+                                switch_cmds.append(20 + idx_temp)
 
-            return filtered_cmds
+                        if switch_cmds:
+                            filtered_cmds = switch_cmds
+                        else:
+                            filtered_cmds = [0]
+
+                return filtered_cmds
 
 
-        Battle.available_commands = patched_available_commands
-        Battle._aegis_available_commands_patched3 = True
-        print("ℹ️ [Aegis Patch] Battle.available_commands 瀕死交代完全排除パッチが適用されました。")
+            Battle.available_commands = patched_available_commands
+            Battle._aegis_available_commands_patched3 = True
+            print("ℹ️ [Aegis Patch] Battle.available_commands 瀕死交代完全排除パッチが適用されました。")
 
     # Battle.battle_command 内部ランダムエラー防止パッチ
     if not hasattr(Battle, '_aegis_battle_command_patched'):
@@ -1818,12 +1840,12 @@ if __name__ == "__main__":
                             battle_obj.selected and player < len(battle_obj.selected)) else []
                     is_valid = True
 
-                    # インデックス範囲外、あるいは瀕死(HP=0)、あるいは現在のアクティブ自身への交代は無効
+                    # インデックス範囲外、あるいは瀕死(HP=0)の場合は無効（自分自身への交代はシミュレータに任せて誤検知を回避）
                     if switch_to_party_idx >= len(party):
                         is_valid = False
                     else:
                         target_poke = party[switch_to_party_idx]
-                        if target_poke == active_poke or target_poke.hp <= 0:
+                        if target_poke.hp <= 0:  # 瀕死状態のみを厳格にチェック
                             is_valid = False
 
                     # 不正な交代を検知した場合、安全な技選択（最初のPPのある技）にフォールバック
@@ -1840,7 +1862,6 @@ if __name__ == "__main__":
                             f"⚠️ [Sanitizer] プレイヤー {player} の不正な交代コマンド ({cmd}) を安全な技選択 ({fallback_cmd}) へ強制クレンジングしました。")
 
             return sanitized
-
 
         # 進行メソッド (Proceed) の拡張
         def patched_proceed(self, commands=None):
