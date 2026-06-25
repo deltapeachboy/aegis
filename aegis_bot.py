@@ -8,7 +8,6 @@ import os
 import json
 import io
 import time
-from collections import Counter
 import warnings
 import numpy as np
 import cv2
@@ -101,17 +100,8 @@ from src.rebel.value_network import ReBeLValueNetwork
 # =========================================================================
 _original_value_network_forward = ReBeLValueNetwork.forward if hasattr(ReBeLValueNetwork, "forward") else None
 
-# =========================================================================
-# 🚀 [Aegis Reward Shaping Patch Ver 16.0] 設置・状態異常・特殊価値補正
-# =========================================================================
-_original_value_network_forward = ReBeLValueNetwork.forward if hasattr(ReBeLValueNetwork, "forward") else None
-
 
 def shaped_value_network_forward(self, states, *args, **kwargs):
-    """
-    ステルスロック等の設置技と『あくび・睡眠』が同時に成立した際の
-    『起点コンボ・ループハメ展開』に強力な相乗価値補正を適用します。
-    """
     predictions = _original_value_network_forward(self, states, *args,
                                                   **kwargs) if _original_value_network_forward else states
     try:
@@ -124,55 +114,30 @@ def shaped_value_network_forward(self, states, *args, **kwargs):
                 my_side = 0
                 opp_side = 1
 
-                # A. 設置技(ステロ, まきびし, どくびし)の有無を監査
-                my_has_hazards = False
-                opp_has_hazards = False
+                # A. ステルスロック設置ボーナス (期待値勝率 ±0.05 補正)
                 if hasattr(current_battle, 'side_conditions') and current_battle.side_conditions:
-                    opp_cond = current_battle.side_conditions[opp_side]
-                    my_cond = current_battle.side_conditions[my_side]
-
-                    # 相手側のコートに設置されている場合
-                    if opp_cond.get('stealth_rock') or opp_cond.get('spikes') or opp_cond.get('toxic_spikes'):
-                        opp_has_hazards = True
+                    if current_battle.side_conditions[opp_side].get('stealth_rock'):
                         shaped_prob += 0.05
-                    # 自分側のコートに設置されている場合
-                    if my_cond.get('stealth_rock') or my_cond.get('spikes') or my_cond.get('toxic_spikes'):
-                        my_has_hazards = True
+                    if current_battle.side_conditions[my_side].get('stealth_rock'):
                         shaped_prob -= 0.05
 
+                # B. あくび・状態異常ボーナス (期待値勝率 ±0.03〜0.04 補正)
                 my_active = current_battle.pokemon[my_side]
                 opp_active = current_battle.pokemon[opp_side]
 
-                # B. あくび・睡眠状態の有無を監査
-                my_is_yawned_or_asleep = False
-                opp_is_yawned_or_asleep = False
-
                 if opp_active:
-                    opp_ailment = getattr(opp_active, 'ailment', 'None')
-                    if getattr(opp_active, 'yawn', 0) > 0 or opp_ailment in ['slp', '眠り']:
-                        opp_is_yawned_or_asleep = True
+                    if getattr(opp_active, 'yawn', 0) > 0:
                         shaped_prob += 0.04
-                    if getattr(opp_active, 'status_con', None) or opp_ailment not in ['None', '']:
+                    if getattr(opp_active, 'status_con', None):
                         shaped_prob += 0.03
 
                 if my_active:
-                    my_ailment = getattr(my_active, 'ailment', 'None')
-                    if getattr(my_active, 'yawn', 0) > 0 or my_ailment in ['slp', '眠り']:
-                        my_is_yawned_or_asleep = True
+                    if getattr(my_active, 'yawn', 0) > 0:
                         shaped_prob -= 0.04
-                    if getattr(my_active, 'status_con', None) or my_ailment not in ['None', '']:
+                    if getattr(my_active, 'status_con', None):
                         shaped_prob -= 0.03
 
-                # 🌟 C. 【設置技 ＋ あくびコンボ相乗効果】の価値前借り
-                # 相手側に設置があり、かつ相手があくび/睡眠の場合（居座れば眠り、交代すればステロダメージを受ける絶望ループ状況）
-                if opp_has_hazards and opp_is_yawned_or_asleep:
-                    shaped_prob += 0.08  # コンボ評価としてさらに +8% 加算
-
-                # 逆に自分が設置技とあくび/睡眠を同時に押し付けられている場合
-                if my_has_hazards and my_is_yawned_or_asleep:
-                    shaped_prob -= 0.08  # 不利評価として -8% 減算
-
-                # D. 能力ランク（積み状態）の価値補正 (A, C, Sは+0.02、B, Dは+0.01)
+                # C. 能力ランク（積み状態）の価値補正 (A, C, Sは+0.02、B, Dは+0.01)
                 if my_active and hasattr(my_active, 'rank'):
                     for stat_idx, factor in [(1, 0.02), (3, 0.02), (5, 0.02), (2, 0.01), (4, 0.01)]:
                         try:
@@ -187,20 +152,20 @@ def shaped_value_network_forward(self, states, *args, **kwargs):
                         except Exception:
                             pass
 
-                # E. 天候（砂嵐）天候シナジー補正 (勝率 ±0.02 補正)
+                # D. 天候（砂嵐）天候シナジー補正 (勝率 ±0.02 補正)
                 if getattr(current_battle, 'weather', None) == 'sandstorm':
                     if my_active and any(t in ['いわ', 'じめん', 'はがね'] for t in my_active.types):
                         shaped_prob += 0.02
                     if opp_active and any(t in ['いわ', 'じめん', 'はがね'] for t in opp_active.types):
                         shaped_prob -= 0.02
 
-                # F. ミミッキュの「ばけのかわ」の価値前借り (勝率 ±0.05 補正)
+                # E. ミミッキュの「ばけのかわ（インチキ保証）」の価値前借り (勝率 ±0.05 補正)
                 if my_active and my_active.name == "ミミッキュ":
                     shaped_prob += 0.05
                 if opp_active and opp_active.name == "ミミッキュ":
                     shaped_prob -= 0.05
 
-                # G. イダイトウの「おはかまいり」の価値前借り
+                # F. イダイトウの「おはかまいり（逆転火力）」の価値前借り
                 if my_active and "イダイトウ" in my_active.name:
                     dead_count = sum(1 for p in current_battle.selected[my_side] if p.hp <= 0)
                     shaped_prob += dead_count * 0.03
@@ -208,7 +173,6 @@ def shaped_value_network_forward(self, states, *args, **kwargs):
                     dead_count_opp = sum(1 for p in current_battle.selected[opp_side] if p.hp <= 0)
                     shaped_prob -= dead_count_opp * 0.03
 
-                # 勝率予測を 1%〜99% の範囲にクリッピングして確率の破綻を防止
                 shaped_prob = max(0.01, min(0.99, shaped_prob))
                 predictions[0][0] = shaped_prob
                 predictions[0][1] = 1.0 - shaped_prob
@@ -259,13 +223,12 @@ def get_possible_mega_stones(p_name: str) -> List[str]:
 # =========================================================================
 class AegisTeamBuilder:
     """
-    Project Aegis 相性補完基本選出 ＆ メタカウンター統合型 構築自動生成システム (Layer 16)
-    基本選出3匹の弱点タイプおよび特定環境メタに対する「カウンター枠(4〜6匹目)」の配備、
-    および「からをやぶる」等の両刀積み技に対する動的型判定を完全サポート。
+    Project Aegis 構築自動生成システム (Layer 15)
+    能力ポイント制に基づく上限付きランダム配分、および性格・特性、半減実フィルターを完全統合。
     """
 
     MEGA_PROBABILITIES = {
-        "ライチュウ": 0.9, "ガブリアス": 0.1, "ムクホーク": 0.66, "ラグラージ": 0.5,
+        "ライチュウ": 0.9, "ガブリアス": 0.1, "モルフォン": 0.66, "ラグラージ": 0.5,
         "リザードン": 0.9, "メタグロス": 0.8, "バシャーモ": 0.5, "ギャラドス": 0.5,
         "カイリュー": 0.5, "キラフロル": 0.5, "クチート": 0.9, "ゲンガー": 0.66,
         "ドラミドロ": 0.66, "ハッサム": 0.66, "ミミロップ": 0.8, "メガニウム": 0.9,
@@ -280,40 +243,99 @@ class AegisTeamBuilder:
     }
 
     ITEM_TIERS = {
-        "ち力のハチマキ": 1.0, "ものしりメガネ": 1.0, "おおきなねっこ": 0.1,
-        "ひかりのねんど": 0.2, "メトロノーム": 0.5, "こうかくレンズ": 0.6,
-        "あついいわ": 0.1, "さらさらいわ": 0.1, "しめったいわ": 0.1,
-        "つめたいいわ": 0.1, "いのちのたま": 2.0, "きれいなぬけがら": 0.15,
-        "くろいてっきゅう": 0.1, "たつじんのおび": 1.5, "フォーカスレンズ": 0.5,
-        "クラボのみ": 0.1, "カゴのみ": 1.5, "モモンのみ": 0.1, "チーゴのみ": 0.1,
-        "ナナシのみ": 0.1, "ヒメリのみ": 0.1, "オレンのみ": 0.1, "キーのみ": 0.1,
-        "ラムのみ": 2.0, "オボンのみ": 3.0, "オッカのみ": 0.3, "イトケのみ": 0.3,
-        "ソクノのみ": 0.3, "リンドのみ": 0.3, "ヤチェのみ": 0.3, "ヨプのみ": 0.3,
-        "ビアーのみ": 0.3, "シュカのみ": 0.3, "バコウのみ": 0.3, "ウタンのみ": 0.3,
-        "タンガのみ": 0.3, "ヨロギのみ": 0.3, "カシブのみ": 0.3, "ハバンのみ": 0.3,
-        "ナモのみ": 0.3, "リリバのみ": 0.3, "ロゼルのみ": 0.3, "ホズのみ": 0.3,
-        "おうじゃのしるし": 0.2, "メタルコート": 1.0, "きせきのタネ": 1.0,
-        "もくたん": 1.0, "しんぴのしずく": 1.0, "シルクのスカーフ": 1.0,
-        "するどいくちばし": 1.0, "ぎんのこな": 1.0, "じしゃく": 1.0,
-        "かたいたし": 1.0, "のろいのおふだ": 1.0, "りゅうのキバ": 1.0,
-        "どくばり": 1.0, "やわらかいすな": 1.0, "くろいメガネ": 1.0,
-        "くろおび": 1.0, "とけないこおり": 1.0, "まがったスプーン": 1.0,
-        "きあいのハチマキ": 0.1, "ピントレンズ": 1.0, "たべのこし": 4.0,
-        "かいがらのすず": 0.15, "きあいのタスキ": 4.0, "こだわりスカーフ": 3.5,
-        "でんきだま": 0.1, "ひかりのこな": 1.0, "しろいハーブ": 0.75,
-        "メンタルハーブ": 0.5, "ようせいのハネ": 1.0, "こだわりハチマキ": 2.5,
-        "こだわりメガネ": 2.5, "とつげきチョッキ": 2.5,
+        "ち力のハチマキ": 1.0,
+        "ものしりメガネ": 1.0,
+        "おおきなねっこ": 0.1,
+        "ひかりのねんど": 0.2,
+        "メトロノーム": 0.5,
+        "こうかくレンズ": 0.6,
+        "あついいわ": 0.1,
+        "さらさらいわ": 0.1,
+        "しめったいわ": 0.1,
+        "つめたいいわ": 0.1,
+        "いのちのたま": 2.0,
+        "きれいなぬけがら": 0.15,
+        "くろいてっきゅう": 0.1,
+        "たつじんのおび": 1.5,
+        "フォーカスレンズ": 0.5,
+        "クラボのみ": 0.1,
+        "カゴのみ": 1.5,
+        "モモンのみ": 0.1,
+        "チーゴのみ": 0.1,
+        "ナナシのみ": 0.1,
+        "ヒメリのみ": 0.1,
+        "オレンのみ": 0.1,
+        "キーのみ": 0.1,
+        "ラムのみ": 2.0,
+        "オボンのみ": 3.0,
+        "オッカのみ": 0.3,
+        "イトケのみ": 0.3,
+        "ソクノのみ": 0.3,
+        "リンドのみ": 0.3,
+        "ヤチェのみ": 0.3,
+        "ヨプのみ": 0.3,
+        "ビアーのみ": 0.3,
+        "シュカのみ": 0.3,
+        "バコウのみ": 0.3,
+        "ウタンのみ": 0.3,
+        "タンガのみ": 0.3,
+        "ヨロギのみ": 0.3,
+        "カシブのみ": 0.3,
+        "ハバンのみ": 0.3,
+        "ナモのみ": 0.3,
+        "リリバのみ": 0.3,
+        "ロゼルのみ": 0.3,
+        "ホズのみ": 0.3,
+        "おうじゃのしるし": 0.2,
+        "メタルコート": 1.0,
+        "きせきのタネ": 1.0,
+        "もくたん": 1.0,
+        "しんぴのしずく": 1.0,
+        "シルクのスカーフ": 1.0,
+        "するどいくちばし": 1.0,
+        "ぎんのこな": 1.0,
+        "じしゃく": 1.0,
+        "かたいたし": 1.0,
+        "のろいのおふだ": 1.0,
+        "りゅうのキバ": 1.0,
+        "どくばり": 1.0,
+        "やわらかいすな": 1.0,
+        "くろいメガネ": 1.0,
+        "くろおび": 1.0,
+        "とけないこおり": 1.0,
+        "まがったスプーン": 1.0,
+        "きあいのハチマキ": 0.1,
+        "ピントレンズ": 1.0,
+        "たべのこし": 4.0,
+        "かいがらのすず": 0.15,
+        "きあいのタスキ": 4.0,
+        "こだわりスカーフ": 3.5,
+        "でんきだま": 0.1,
+        "ひかりのこな": 1.0,
+        "しろいハーブ": 0.75,
+        "メンタルハーブ": 0.5,
+        "ようせいのハネ": 1.0,
+        "こだわりハチマキ": 2.5,
+        "こだわりメガネ": 2.5,
+        "とつげきチョッキ": 2.5,
     }
 
-    WALL_SETTER_POKEMON = {"オーロンゲ", "ジャローダ", "アローラキュウコン"}
-    POWERFUL_ABILITIES = {"マルチスケイル", "ち力もち", "いたずらごころ", "ひでり", "あめふらし", "すなおこし",
-                          "ゆきふらし", "テクニシャン", "かそく"}
-    NATURE_WEIGHTS = {"いじっぱり": 0.1, "ひかえめ": 0.1, "ようき": 0.1, "おくびょう": 0.1, "わんぱく": 0.1,
-                      "しんちょう": 0.1, "ずぶとい": 0.1, "おだやか": 0.1, "ゆうかん": 0.05, "れいせい": 0.05,
-                      "さみしがり": 0.05, "おっとり": 0.05, "やんちゃ": 0.05, "うっかりや": 0.05}
+    WALL_SETTER_POKEMON = {
+        "オーロンゲ", "ジャローダ", "アローラキュウコン"
+    }
 
-    # 環境の主要メタ(想定ターゲット)
-    ENVIRONMENT_METAS = ["ハバタクカミ", "サーフゴー", "カイリュー", "テツノブジン", "パオジアン"]
+    POWERFUL_ABILITIES = {
+        "マルチスケイル", "ち力もち", "いたずらごころ",
+        "ひでり", "あめふらし", "すなおこし",
+        "ゆきふらし", "テクニシャン", "かそく"
+    }
+
+    NATURE_WEIGHTS = {
+        "いじっぱり": 0.1, "ひかえめ": 0.1, "ようき": 0.1, "おくびょう": 0.1,
+        "わんぱく": 0.1, "しんちょう": 0.1, "ずぶとい": 0.1, "おだやか": 0.1,
+        "ゆうかん": 0.05, "れいせい": 0.05, "さみしがり": 0.05, "おっとり": 0.05,
+        "やんちゃ": 0.05, "うっかりや": 0.05
+    }
 
     def __init__(self, learnsets: Dict[str, List[str]], mb_pokemon: Set[str], mb_items: Set[str]):
         self.learnsets = learnsets
@@ -403,6 +425,7 @@ class AegisTeamBuilder:
         except Exception:
             return 0.0, 0.0
 
+    # 上限32付き能力ポイントランダム配分アルゴリズム
     def allocate_stat_points_randomly(self, indices: List[int], total_points: int = 66, max_single: int = 32) -> List[
         int]:
         points = [0] * 6
@@ -418,12 +441,7 @@ class AegisTeamBuilder:
         return points
 
     def build_team(self, core_name: str, pokemon_weights: Optional[dict] = None) -> Dict[str, Any]:
-        """
-        [Aegis Build Ver 16.0]
-        1〜3体目(基本選出)を固め、4〜6体目は基本選出が苦手とする共通弱点タイプを補完し、
-        かつ主要メタに強いカウンター要員を配備する二段階選定システム。
-        """
-        # ギルガルドの図鑑補正
+        """軸(コア)に基づき、能力ポイント制と技選定の正常化に適合したチーム構築を生成"""
         if core_name == "ギルガルド" and "ギルガルド" not in Pokemon.zukan:
             for k in ['ギルガルド(シールド)', 'ギルガルド（シールド）']:
                 if k in Pokemon.zukan:
@@ -440,10 +458,7 @@ class AegisTeamBuilder:
 
         team_members = [core_name]
 
-        # ----------------------------------------------------
-        # 🚀 【第1段階】 1〜3体目（基本選出）の決定
-        # ----------------------------------------------------
-        while len(team_members) < 3:
+        while len(team_members) < 6:
             current_weaknesses = []
             for member in team_members:
                 current_weaknesses += self.calculate_weaknesses(Pokemon.zukan[member]["type"])
@@ -454,6 +469,13 @@ class AegisTeamBuilder:
             for candidate in self.mb_pokemon:
                 if candidate in team_members:
                     continue
+
+                if candidate == "ギルガルド" and "ギルガルド" not in Pokemon.zukan:
+                    for k in ['ギルガルド(シールド)', 'ギルガルド（シールド）']:
+                        if k in Pokemon.zukan:
+                            Pokemon.zukan['ギルガルド'] = deepcopy(Pokemon.zukan[k])
+                            Pokemon.zukan['ギルガルド']['display_name'] = 'ギルガルド'
+                            break
 
                 if not Pokemon.zukan.get(candidate):
                     continue
@@ -475,6 +497,7 @@ class AegisTeamBuilder:
 
                 avg_taimen = taimen_sum / len(team_members)
                 avg_uke = uke_sum / len(team_members)
+
                 type_score += (avg_taimen * 0.01) + (avg_uke * 1.5)
 
                 w2v_score = 0.0
@@ -490,75 +513,7 @@ class AegisTeamBuilder:
 
             if best_candidate:
                 team_members.append(best_candidate)
-            else:
-                break
 
-        # ----------------------------------------------------
-        # 🚀 【第2段階】 4〜6体目（カウンター・弱点補完選出）の決定
-        # ----------------------------------------------------
-        while len(team_members) < 6:
-            # 1. 基本選出(1〜3体)が共通して苦手（弱点）とするタイプを算出
-            basic_weaknesses = []
-            for member in team_members[:3]:
-                basic_weaknesses += self.calculate_weaknesses(Pokemon.zukan[member]["type"])
-
-            # 最も被っている弱点タイプ（最優先補完タイプ）を特定
-            weak_counts = Counter(basic_weaknesses)
-            priority_types = [item[0] for item in weak_counts.most_common(3)]  # 上位3つの苦手タイプ
-
-            best_counter_candidate = None
-            max_counter_score = -999.0
-
-            for candidate in self.mb_pokemon:
-                if candidate in team_members:
-                    continue
-                if not Pokemon.zukan.get(candidate):
-                    continue
-                if any(Pokemon.zukan[candidate]["display_name"] == Pokemon.zukan[m]["display_name"] for m in
-                       team_members):
-                    continue
-
-                # A. 弱点補完スコア（基本選出が苦手なタイプを半減以下で受けられるか）
-                cand_res = self.calculate_resistances(Pokemon.zukan[candidate]["type"])
-                type_shield_score = sum(3.0 if t in cand_res else 0.0 for t in priority_types)
-
-                # B. 主要メタへの対面性能スコア (ハバタクカミ、カイリュー等に対して有利か)
-                meta_taimen_sum = 0.0
-                actual_targets = [t for t in self.ENVIRONMENT_METAS if t in Pokemon.zukan]
-                if actual_targets:
-                    for target in actual_targets:
-                        taimen, _ = self.calculate_matchup_tactical_scores(candidate, target)
-                        meta_taimen_sum += taimen
-                    avg_meta_taimen = meta_taimen_sum / len(actual_targets)
-                else:
-                    avg_meta_taimen = 0.0
-
-                # C. 基本選出メンバーとの最低限のWord2Vec共起
-                w2v_score = 0.0
-                if self.w2v_model:
-                    synergies = [self.get_w2v_synergy(m, candidate) for m in team_members[:3]]
-                    w2v_score = sum(synergies) / len(synergies) if synergies else 0.0
-
-                # 補完スコアとメタ対策スコアを合算
-                total_counter_score = type_shield_score + (avg_meta_taimen * 0.02) + (w2v_score * 3.0)
-
-                if total_counter_score > max_counter_score:
-                    max_counter_score = total_counter_score
-                    best_counter_candidate = candidate
-
-            if best_counter_candidate:
-                team_members.append(best_counter_candidate)
-            else:
-                # フォールバック
-                fallback_pool = [c for c in self.mb_pokemon if c not in team_members and Pokemon.zukan.get(c)]
-                if fallback_pool:
-                    team_members.append(random.choice(fallback_pool))
-                else:
-                    break
-
-        # ----------------------------------------------------
-        # 🚀 【第3段階】 型の割り当て (技・努力値・性格の強結合)
-        # ----------------------------------------------------
         TYPE_BOOSTING_ITEMS = {
             "メタルコート": "はがね", "きせきのタネ": "くさ", "もくたん": "ほのお",
             "しんぴのしずく": "みず", "シルクのスカーフ": "ノーマル", "するどいくちばし": "ひこう",
@@ -568,6 +523,7 @@ class AegisTeamBuilder:
             "とけないこおり": "こおり", "まがったスプーン": "エスパー", "ようせいのハネ": "フェアリー"
         }
 
+        # 各半減実と対応するダメージタイプのマッピング
         TYPE_REDUCING_BERRIES = {
             "オッカのみ": "ほのお", "イトケのみ": "みず", "ソクノのみ": "でんき",
             "リンドのみ": "くさ", "ヤチェのみ": "こおり", "ヨプのみ": "かくとう",
@@ -598,100 +554,16 @@ class AegisTeamBuilder:
             zukan_entry = Pokemon.zukan[name]
             dyn_data = pokemon_weights.get(name, {}) if pokemon_weights else {}
 
-            # 🚀 [ステップ1: 技構成の先行サンプリング (補助技重み 1.0 正常化)]
-            learnable = self.learnsets.get(name, ["テラバースト"])
-            move_weights = []
-            for move_name in learnable:
-                static_w = 1.0  # 旧仕様の補助技冷遇(0.1)を完全に撤廃
-                dynamic_w = dyn_data.get("moves", {}).get(move_name, 1.0)
-                move_weights.append(static_w * dynamic_w)
-
-            chosen_moves = []
-            if name == "メタモン":
-                # メタモン専用：技は「へんしん」のみに強制固定して警告を防止
-                chosen_moves = ["へんしん"]
-            else:
-                temp_pool = list(learnable)
-                temp_weights = list(move_weights)
-
-                # 物理/特殊アタッカーの攻撃技最低1枠ねじ込みガード
-                attack_moves_pool = []
-                for m in learnable:
-                    m_data = Pokemon.all_moves.get(m)
-                    if m_data and m_data.get("class", "sta") != "sta":
-                        attack_moves_pool.append(m)
-
-                force_attack = (random.random() < 0.80) and len(attack_moves_pool) > 0
-                if force_attack:
-                    atk_weights = [move_weights[learnable.index(m)] for m in attack_moves_pool]
-                    if sum(atk_weights) <= 0:
-                        atk_weights = [1.0] * len(attack_moves_pool)
-
-                    chosen_atk = random.choices(attack_moves_pool, weights=atk_weights, k=1)[0]
-                    chosen_moves.append(chosen_atk)
-                    idx = temp_pool.index(chosen_atk)
-                    temp_pool.pop(idx)
-                    temp_weights.pop(idx)
-
-                num_to_select = min(4 - len(chosen_moves), len(temp_pool))
-                for _ in range(num_to_select):
-                    if sum(temp_weights) <= 0:
-                        temp_weights = [1.0] * len(temp_pool)
-                    chosen = random.choices(temp_pool, weights=temp_weights, k=1)[0]
-                    chosen_moves.append(chosen)
-                    idx = temp_pool.index(chosen)
-                    temp_pool.pop(idx)
-                    temp_weights.pop(idx)
-
-                if len(chosen_moves) < 4:
-                    extra_pool = [m for m in learnable if m not in chosen_moves]
-                    needed = 4 - len(chosen_moves)
-                    if extra_pool:
-                        extra_moves = random.sample(extra_pool, min(needed, len(extra_pool)))
-                        chosen_moves.extend(extra_moves)
-                    while len(chosen_moves) < 4:
-                        chosen_moves.append("わるあがき")
-
-            # 🚀 [ステップ2: 確定技に基づく物理・特殊判定（からをやぶる等への適合）]
-            has_physical_attack = False
-            has_special_attack = False
-            for mv in chosen_moves:
-                mv_data = Pokemon.all_moves.get(mv)
-                if mv_data:
-                    mv_class = mv_data.get("class", "sta")
-                    if mv_class == "phy":
-                        has_physical_attack = True
-                    elif mv_class == "spc":
-                        has_special_attack = True
-
-            # 積み技による型属性への影響（からをやぶる等は技構成の物理/特殊技スロット数に依存）
-            if any(m in chosen_moves for m in ["つるぎのまい", "りゅうのまい", "ビルドアップ"]):
-                has_physical_attack = True
-            if any(m in chosen_moves for m in ["わるだくみ", "めいそう"]):
-                has_special_attack = True
-
-            # 🌟 「からをやぶる」を検知した場合の、直接攻撃技との両面判定
-            if "からをやぶる" in chosen_moves:
-                if has_physical_attack and not has_special_attack:
-                    # 物理攻撃技のみなら物理アタッカーを強化
-                    has_physical_attack = True
-                elif has_special_attack and not has_physical_attack:
-                    # 特殊攻撃技のみなら特殊アタッカーを強化
-                    has_special_attack = True
-                else:
-                    # 両方、または攻撃技が無い場合は両刀型への適合に広げる
-                    has_physical_attack = True
-                    has_special_attack = True
-
-            # 🚀 [ステップ3: 攻撃属性に応じた努力値テンプレート配分]
+            # 🚀 [A. 能力ポイント決定 (極振り50% | 両刀4% | 複合46%)]
             base_stats = zukan_entry.get("base", [100, 100, 100, 100, 100, 100])
+
             stat_points = [0] * 6
             ev_category = "max_out"
             adj_nature_weights = {}
 
             rand_ev = random.random()
 
-            if rand_ev < 0.04 or (has_physical_attack and has_special_attack and random.random() < 0.3):
+            if rand_ev < 0.04:
                 # 1. 両刀型 (4%)
                 ev_category = "mixed"
                 if random.random() < 0.5:
@@ -706,25 +578,22 @@ class AegisTeamBuilder:
                 # 2. 複合調整型 (46%)
                 ev_category = "hybrid"
                 hybrid_patterns = [
-                    ("HBD", [0, 2, 4]), ("HBDS", [0, 2, 4, 5]),
-                    ("HABS", [0, 1, 2, 5]), ("HBCS", [0, 2, 3, 5]),
-                    ("HAB", [0, 1, 2]), ("HBC", [0, 2, 3]),
-                    ("HAD", [0, 1, 4]), ("HCD", [0, 3, 4]),
-                    ("HAS", [0, 1, 5]), ("HCS", [0, 3, 5]),
-                    ("HBS", [0, 2, 5]), ("HDS", [0, 4, 5]),
+                    ("HBD", [0, 2, 4]),  # 総合耐久
+                    ("HBDS", [0, 2, 4, 5]),  # 耐久＋素早さ
+                    ("HABS", [0, 1, 2, 5]),  # 物理調整アタッカー
+                    ("HBCS", [0, 2, 3, 5]),  # 特殊調整アタッカー
+                    ("HAB", [0, 1, 2]),  # 物理中耐久
+                    ("HBC", [0, 2, 3]),  # 特殊中耐久
+                    ("HAD", [0, 1, 4]),  # 物理特防
+                    ("HCD", [0, 3, 4]),  # 特殊特防
+                    ("HAS", [0, 1, 5]),  # HP・S調整 (必須)
+                    ("HCS", [0, 3, 5]),  # HP・S調整 (必須)
+                    ("HBS", [0, 2, 5]),  # S微振り物理耐久 (必須)
+                    ("HDS", [0, 4, 5]),  # S微振り特殊耐久 (必須)
                 ]
 
-                # 物理/特殊に反するテンプレートの除外
-                valid_patterns = []
-                for p_name, idx_list in hybrid_patterns:
-                    if "A" in p_name and has_special_attack and not has_physical_attack: continue
-                    if "C" in p_name and has_physical_attack and not has_special_attack: continue
-                    valid_patterns.append((p_name, idx_list))
-
-                if not valid_patterns:
-                    valid_patterns = hybrid_patterns
-
-                chosen_pattern_name, target_indices = random.choice(valid_patterns)
+                # 特化スロットの決定
+                chosen_pattern_name, target_indices = random.choice(hybrid_patterns)
                 stat_points = self.allocate_stat_points_randomly(target_indices, total_points=66, max_single=32)
 
                 if "S" in chosen_pattern_name:
@@ -738,13 +607,7 @@ class AegisTeamBuilder:
             else:
                 # 3. 極振りブッパ型 (50%)
                 ev_category = "max_out"
-                max_out_candidates = ["HB", "HD", "HS"]
-                if has_physical_attack or not has_special_attack:
-                    max_out_candidates += ["HA", "AS"]
-                if has_special_attack or not has_physical_attack:
-                    max_out_candidates += ["HC", "CS"]
-
-                chosen_max_type = random.choice(max_out_candidates)
+                chosen_max_type = random.choice(["HA", "HB", "HC", "HD", "HS", "AS", "CS"])
 
                 if chosen_max_type == "HA":
                     stat_points[0], stat_points[1], stat_points[5] = 32, 32, 2
@@ -771,33 +634,51 @@ class AegisTeamBuilder:
                     adj_nature_weights["おくびょう"] = 4.0
                     adj_nature_weights["ひかえめ"] = 2.5
 
-            # 🚀 [ステップ4: 性格および特性抽選]
+            # 🚀 [B. 技構成の先行サンプリング]
+            learnable = self.learnsets.get(name, ["テラバースト"])
+            move_weights = [dyn_data.get("moves", {}).get(m, 1.0) for m in learnable]
+
+            chosen_moves = []
+            temp_pool = list(learnable)
+            temp_weights = list(move_weights)
+            num_to_select = min(4, len(temp_pool))
+            for _ in range(num_to_select):
+                if sum(temp_weights) <= 0:
+                    temp_weights = [1.0] * len(temp_pool)
+                chosen = random.choices(temp_pool, weights=temp_weights, k=1)[0]
+                chosen_moves.append(chosen)
+                idx = temp_pool.index(chosen)
+                temp_pool.pop(idx)
+                temp_weights.pop(idx)
+
+            if len(chosen_moves) < 4:
+                extra_pool = [m for m in learnable if m not in chosen_moves]
+                needed = 4 - len(chosen_moves)
+                if extra_pool:
+                    extra_moves = random.sample(extra_pool, min(needed, len(extra_pool)))
+                    chosen_moves.extend(extra_moves)
+                while len(chosen_moves) < 4:
+                    chosen_moves.append("わるあがき")
+
+            # 🚀 [C. 確定技に基づく性格・特性抽選]
             adj_ability_weights = {}
 
             natures = list(self.NATURE_WEIGHTS.keys())
-            nature_weights = []
-            for nat in natures:
-                static_w = self.NATURE_WEIGHTS[nat]
-                dynamic_w = dyn_data.get("natures", {}).get(nat, 1.0)
-                synergy_w = adj_nature_weights.get(nat, 1.0)
-
-                # デメリット性格の排除
-                if has_physical_attack and not has_special_attack:
-                    if nat in ["ひかえめ", "おくびょう", "ずぶとい", "おだやか"]:
-                        static_w = 0.0
-                if has_special_attack and not has_physical_attack:
-                    if nat in ["いじっぱり", "ようき", "わんぱく", "しんちょう"]:
-                        static_w = 0.0
-
-                nature_weights.append(static_w * dynamic_w * synergy_w)
-
-            if sum(nature_weights) <= 0:
-                nature_weights = [1.0] * len(natures)
+            nature_weights = [
+                self.NATURE_WEIGHTS[nat] * dyn_data.get("natures", {}).get(nat, 1.0) * adj_nature_weights.get(nat, 1.0)
+                for nat in natures
+            ]
             nature = random.choices(natures, weights=nature_weights, k=1)[0]
 
             abilities = zukan_entry.get("ability", ["とくせいなし"])
+
             if name == "メタモン" and "かわりもの" in abilities:
-                ability = "かわりもの"
+                if random.random() < 0.8:
+                    ability = "かわりもの"
+                else:
+                    other_abilities = [ab for ab in abilities if ab != "かわりもの"]
+                    ability = random.choice(other_abilities) if other_abilities else "かわりもの"
+
             elif abilities:
                 ability_weights = [
                     (2.0 if ab in self.POWERFUL_ABILITIES else 1.0) * dyn_data.get("abilities", {}).get(ab,
@@ -809,7 +690,7 @@ class AegisTeamBuilder:
             else:
                 ability = "とくせいなし"
 
-            # 🚀 [ステップ5: 持ち物（メガストーン適合）サンプリング]
+            # 持ち物サンプリング
             assigned_item = ""
             mega_candidates = get_possible_mega_stones(name)
             valid_mega_stones = [stone for stone in mega_candidates if stone in self.mb_items]
@@ -845,7 +726,7 @@ class AegisTeamBuilder:
                             if req_type not in attack_types:
                                 weight = 0.0
 
-                        elif itm in TYPE_REDUCING_BERRIES:
+                        if itm in TYPE_REDUCING_BERRIES:
                             req_type = TYPE_REDUCING_BERRIES[itm]
                             is_weak = False
                             if req_type in Pokemon.type_id:
@@ -865,7 +746,7 @@ class AegisTeamBuilder:
                     if sum(item_weights) <= 0:
                         item_weights = [1.0] * len(available_items)
 
-                    # 不適合メガストーン排除フィルター
+                    # 🛡️【安全対策ガード】自分に不適合な他種族専用 of メガストーン（〜ナイト）を抽選プールから物理排除
                     my_mega_stone = name.split("(")[0] + "ナイト"
                     filtered_available_items = []
                     filtered_item_weights = []
@@ -897,7 +778,6 @@ class AegisTeamBuilder:
             }
 
         return generated_party
-
 
 # =========================================================================
 # 4. 【高度化】AegisTeamSelector (補完評価＆BERT選出予測の安全な統合)
@@ -949,8 +829,14 @@ class AegisTeamSelector:
                 warnings.warn(f"SelectionBERTの動的ロードに失敗しました(相性総当たり評価にフォールバックします): {e}")
 
     def evaluate_matchup(self, my_poke: Pokemon, opp_poke: Pokemon) -> float:
+        """
+        お互いのポケモンが実際に採用している『4つの技』に基づいて相性を評価します。
+        全習得技の走査を廃止することで、計算量を350分の1以下に削減し、選出フェーズのフリーズを完全に解消します。
+        """
         score = 0.0
-        my_moves = self.learnsets.get(my_poke.name, ["テラバースト"])
+
+        # 🌟 全習得技ではなく、今回実際に採用されている技（最大4つ）のみに限定
+        my_moves = my_poke.moves if hasattr(my_poke, 'moves') and my_poke.moves else ["テラバースト"]
         opp_types = opp_poke.types
 
         best_my_eff = 0.0
@@ -964,9 +850,10 @@ class AegisTeamSelector:
 
             eff = 1.0
             for opp_type in opp_types:
-                atk_id = Pokemon.type_id.get(move_type, 0)
-                def_id = Pokemon.type_id.get(opp_type, 0)
-                eff *= Pokemon.type_corrections[atk_id][def_id]
+                if move_type in Pokemon.type_id and opp_type in Pokemon.type_id:
+                    atk_id = Pokemon.type_id[move_type]
+                    def_id = Pokemon.type_id[opp_type]
+                    eff *= Pokemon.type_corrections[atk_id][def_id]
 
             if move_type == "じめん" and ("ひこう" in opp_types or opp_poke.ability == "ふゆう"):
                 eff = 0.0
@@ -974,7 +861,8 @@ class AegisTeamSelector:
             if eff > best_my_eff:
                 best_my_eff = eff
 
-        opp_moves = self.learnsets.get(opp_poke.name, ["テラバースト"])
+        # 🌟 相手側も、今回実際に採用されている技（最大4つ）のみに限定
+        opp_moves = opp_poke.moves if hasattr(opp_poke, 'moves') and opp_poke.moves else ["テラバースト"]
         my_types = my_poke.types
 
         best_opp_eff = 0.0
@@ -988,9 +876,10 @@ class AegisTeamSelector:
 
             eff = 1.0
             for my_type in my_types:
-                atk_id = Pokemon.type_id.get(move_type, 0)
-                def_id = Pokemon.type_id.get(my_type, 0)
-                eff *= Pokemon.type_corrections[atk_id][def_id]
+                if move_type in Pokemon.type_id and my_type in Pokemon.type_id:
+                    atk_id = Pokemon.type_id[move_type]
+                    def_id = Pokemon.type_id[my_type]
+                    eff *= Pokemon.type_corrections[atk_id][def_id]
 
             if move_type == "じめん" and ("ひこう" in my_types or my_poke.ability == "ふゆう"):
                 eff = 0.0
