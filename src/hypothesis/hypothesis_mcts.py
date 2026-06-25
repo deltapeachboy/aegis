@@ -21,7 +21,6 @@ from pokepy.battle import Pokemon
 # 🌟 src.rebel から信念状態と仮説適用関数を絶対パスインポート
 from src.rebel.belief_state import PokemonBeliefState, PokemonTypeHypothesis
 from src.hypothesis.pokemon_usage_database import PokemonUsageDatabase
-from src.rebel.public_state import _apply_hypothesis_to_pokemon
 
 # 🌟 MCTSNode 関連の絶対パスインポート
 from src.mcts.mcts_battle import MCTSNode, MCTSNodeForChangeCommand, MyMCTSBattle
@@ -243,9 +242,10 @@ class HypothesisMCTS:
         # 結果を集約
         return self._aggregate_results(all_results, available_commands)
 
-    def _apply_hypothesis(
-        self, battle: Battle, player: int, hypothesis: dict[str, PokemonTypeHypothesis]
-    ) -> Battle:
+    def apply_hypothesis(self, battle: Battle, player: int, hypothesis: dict[str, PokemonTypeHypothesis]) -> Battle:
+        # 1. 使用するメソッドの先頭で安全にインポート（循環インポート対策）
+        from src.rebel.public_state import _apply_hypothesis_to_pokemon
+
         """
         仮説（持ち物の組み合わせ）をBattleに適用
         """
@@ -254,17 +254,13 @@ class HypothesisMCTS:
 
         # 相手の選出ポケモンに持ち物などの型仮説を一括適用
         for pokemon in hypo_battle.selected[opponent]:
-            pokemon_name = pokemon.name
-            if pokemon_name in hypothesis:
-                _apply_hypothesis_to_pokemon(pokemon, hypothesis[pokemon_name])
+            # 2. ポケモンの名前をキーに、その個体向けの仮説を取得
+            h = hypothesis.get(pokemon.name) or hypothesis.get(pokemon.display_name)
 
-        # 場に出ているポケモンにも適用
-        if hypo_battle.pokemon[opponent] is not None:
-            pokemon_name = hypo_battle.pokemon[opponent].name
-            if pokemon_name in hypothesis:
-                _apply_hypothesis_to_pokemon(hypo_battle.pokemon[opponent], hypothesis[pokemon_name])
+            if h is not None:
+                # 3. ループ内で定義された 'pokemon' と、その仮説 'h' を適用する
+                _apply_hypothesis_to_pokemon(pokemon, h)
 
-        _ensure_score_method(hypo_battle)
         return hypo_battle
 
     def _aggregate_results(
