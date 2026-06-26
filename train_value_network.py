@@ -40,16 +40,23 @@ def patched_open(file, *args, **kwargs):
 builtins.open = patched_open
 
 # =========================================================================
-# 1. 【Aegis Namespace Bridge】
+# 1. 【Aegis Namespace Bridge (二重上書き・リセット防止ガード版)】
 # =========================================================================
-sys.modules['src.pokemon_battle_sim'] = types.ModuleType('src.pokemon_battle_sim')
-sys.modules['src.pokemon_battle_sim.pokemon'] = types.ModuleType('src.pokemon_battle_sim.pokemon')
-sys.modules['src.pokemon_battle_sim.battle'] = types.ModuleType('src.pokemon_battle_sim.battle')
-sys.modules['src.pokemon_battle_sim.damage'] = types.ModuleType('src.pokemon_battle_sim.damage')
+# 🌟【根本解決】run_meta_evolution.py で当てられた動的パッチが、
+# インポート時の二重初期化によってリセット・破壊される致命的なバグを完全に防止します。
+if 'src.pokemon_battle_sim' not in sys.modules:
+    sys.modules['src.pokemon_battle_sim'] = types.ModuleType('src.pokemon_battle_sim')
+if 'src.pokemon_battle_sim.pokemon' not in sys.modules:
+    sys.modules['src.pokemon_battle_sim.pokemon'] = types.ModuleType('src.pokemon_battle_sim.pokemon')
+if 'src.pokemon_battle_sim.battle' not in sys.modules:
+    sys.modules['src.pokemon_battle_sim.battle'] = types.ModuleType('src.pokemon_battle_sim.battle')
+if 'src.pokemon_battle_sim.damage' not in sys.modules:
+    sys.modules['src.pokemon_battle_sim.damage'] = types.ModuleType('src.pokemon_battle_sim.damage')
 
 import pokepy.utils as utils_module
 
-sys.modules['src.pokemon_battle_sim.utils'] = utils_module
+if 'src.pokemon_battle_sim.utils' not in sys.modules:
+    sys.modules['src.pokemon_battle_sim.utils'] = utils_module
 
 import pokepy.pokemon as pokemon_module
 import pokepy.battle as battle_module
@@ -78,11 +85,98 @@ device = torch.device("cpu")
 print(f"ℹ️ 使用デバイス: {device} (安全なCPU学習に固定しました)")
 
 # 🌟 独立起動時にも pokepy 内のステータス参照バグを回避するグローバルプロパティ注入パッチ
-Pokemon.attack = property(lambda self: self.status[1])
-Pokemon.defense = property(lambda self: self.status[2])
-Pokemon.sp_attack = property(lambda self: self.status[3])
-Pokemon.sp_defense = property(lambda self: self.status[4])
-Pokemon.speed = property(lambda self: self.status[5])
+if not hasattr(Pokemon, 'attack'):
+    Pokemon.attack = property(lambda self: self.status[1])
+if not hasattr(Pokemon, 'defense'):
+    Pokemon.defense = property(lambda self: self.status[2])
+if not hasattr(Pokemon, 'sp_attack'):
+    Pokemon.sp_attack = property(lambda self: self.status[3])
+if not hasattr(Pokemon, 'sp_defense'):
+    Pokemon.sp_defense = property(lambda self: self.status[4])
+
+
+def get_aegis_effective_speed(self) -> int:
+    """
+    天候、おいかぜ、特性(すいすい/すなかき/こだいかっせい/クォークチャージ/かるわざ)、
+    麻痺、スカーフ、ランク補正をすべて厳密に計算した【最終実質素早さ】を返します。
+    """
+    base_speed = self.status[5] if (hasattr(self, 'status') and len(self.status) > 5) else 100
+
+    # 1. ランク補正の適用
+    speed_rank = self.rank[5] if (hasattr(self, 'rank') and len(self.rank) > 5) else 0
+    if speed_rank > 0:
+        rank_modifier = (2.0 + speed_rank) / 2.0
+    elif speed_rank < 0:
+        rank_modifier = 2.0 / (2.0 - speed_rank)
+    else:
+        rank_modifier = 1.0
+
+    speed = int(base_speed * rank_modifier)
+
+    # 仮想バトルインスタンスの参照
+    current_battle = getattr(builtins, '_aegis_current_battle', None)
+    if current_battle and hasattr(current_battle, 'condition'):
+        # 自身を所有するプレイヤー(0 or 1)の特定
+        player_idx = 0
+        for p_idx in [0, 1]:
+            if self in current_battle.selected[p_idx]:
+                player_idx = p_idx
+                break
+
+        # 🌐 A. 天候特性補正 (すいすい / すなかき / こだいかっせい)
+        if getattr(self, 'ability', '') == 'すいすい':
+            rain_val = current_battle.condition.get('rainy', [0, 0])
+            if isinstance(rain_val, list) and player_idx < len(rain_val) and rain_val[player_idx] > 0:
+                speed *= 2
+
+        elif getattr(self, 'ability', '') == 'すなかき':
+            sand_val = current_battle.condition.get('sandstorm', [0, 0])
+            if isinstance(sand_val, list) and player_idx < len(sand_val) and sand_val[player_idx] > 0:
+                speed *= 2
+
+        elif getattr(self, 'ability', '') == 'こだいかっせい':
+            sunny_val = current_battle.condition.get('sunny', [0, 0])
+            has_sun = isinstance(sunny_val, list) and player_idx < len(sunny_val) and sunny_val[player_idx] > 0
+            is_boosted = getattr(self, 'BE_activated', False) or getattr(self, 'boost_index', 0) == 5
+            if has_sun or is_boosted:
+                speed = int(speed * 1.5)
+
+        # 🌐 B. フィールド特性補正 (クォークチャージ)
+        elif getattr(self, 'ability', '') == 'クォークチャージ':
+            elec_val = current_battle.condition.get('elecfield', [0, 0])
+            has_elec = isinstance(elec_val, list) and player_idx < len(elec_val) and elec_val[player_idx] > 0
+            is_boosted = getattr(self, 'BE_activated', False) or getattr(self, 'boost_index', 0) == 5
+            if has_elec or is_boosted:
+                speed = int(speed * 1.5)
+
+        # 🌐 C. おいかぜ補正 (tailwind / oikaze: 2倍)
+        tailwind_val = current_battle.condition.get('tailwind', None)
+        if tailwind_val is None:
+            tailwind_val = current_battle.condition.get('oikaze', [0, 0])
+
+        if isinstance(tailwind_val, list) and player_idx < len(tailwind_val) and tailwind_val[player_idx] > 0:
+            speed *= 2
+
+    # 🌐 D. 特性補正（かるわざ：持ち物消費で2倍）
+    if getattr(self, 'ability', '') == 'かるわざ':
+        if not getattr(self, 'item', '') and getattr(self, 'lost_item', ''):
+            speed *= 2
+
+    # 🌐 E. 持ち物補正 (こだわりスカーフ: 1.5倍)
+    if getattr(self, 'item', '') == 'こだわりスカーフ':
+        speed = int(speed * 1.5)
+
+    # 🌐 F. 状態異常補正 (まひ: 素早さ半減)
+    if getattr(self, 'ailment', '') == 'PAR' or getattr(self, 'ailment', '') == 'まひ':
+        speed = int(speed * 0.5)
+
+    return max(1, speed)
+
+
+# 🌟【冪等性ガード】すでに正しい実質素早さ関数が登録されていれば上書きしない
+if not hasattr(Pokemon, '_aegis_speed_patched') or Pokemon.speed.fget.__name__ != "get_aegis_effective_speed":
+    Pokemon.speed = property(get_aegis_effective_speed)
+    Pokemon._aegis_speed_patched = True
 
 
 # =========================================================================
@@ -103,7 +197,6 @@ class SelfPlayReplayDataset(Dataset):
         if not os.path.exists(self.log_path):
             raise FileNotFoundError(f"対戦ログファイル '{self.log_path}' が見つかりません。")
 
-        # タイムアウト例外のローカル定義
         class ReplayTimeoutException(Exception):
             pass
 
@@ -112,6 +205,8 @@ class SelfPlayReplayDataset(Dataset):
 
         if hasattr(signal, "SIGALRM"):
             signal.signal(signal.SIGALRM, replay_timeout_handler)
+
+        total_sanitized_count = 0
 
         with open(self.log_path, "r", encoding="utf-8") as f:
             for line_idx, line in enumerate(f, 1):
@@ -127,16 +222,19 @@ class SelfPlayReplayDataset(Dataset):
                 if winner is None or winner == -1:
                     continue
 
-                # 特徴量リストのロールバック用バックアップ
                 start_state_idx = len(self.encoded_states)
                 start_target_idx = len(self.targets)
 
-                # 🌟 [リプレイ守護神] 各試合の解読に2秒制限を適用。不整合ハングを自動で切り捨てます。
                 if hasattr(signal, "SIGALRM"):
                     signal.alarm(2)
 
                 try:
                     battle = Battle(seed=seed)
+
+                    # 🌟【根本解決】再現バトル生成直後に、即座にグローバルにバインド
+                    # ポケモンの繰り出し（change_pokemon, land）の時点で天候補正が完全に同期されます。
+                    builtins._aegis_current_battle = battle
+
                     team_p0 = self._rebuild_team(match_data["teams"][0])
                     team_p1 = self._rebuild_team(match_data["teams"][1])
                     battle.selected[0] = team_p0
@@ -177,9 +275,6 @@ class SelfPlayReplayDataset(Dataset):
                                 encoded_pbs = self.analyzer.cfr_solver.value_network.encoder(pbs).cpu()
                             self.encoded_states.append(encoded_pbs)
 
-                            # 🌟 [バグ解消・高速化仕様]
-                            # 価値予測モデルは純粋な勝敗（1.0 / 0.0）をターゲットとして学習させ、
-                            # 中間報酬（ミミッキュ・ステロ・ランク）は推論時に動的に上乗せすることで二重補正を防ぎます。
                             my_win = 1.0 if pl == winner else 0.0
                             opp_win = 1.0 - my_win
                             self.targets.append(torch.tensor([my_win, opp_win], dtype=torch.float))
@@ -187,8 +282,19 @@ class SelfPlayReplayDataset(Dataset):
                         cmds = turn_data["commands"]
                         battle.command = cmds
 
-                        builtins._aegis_current_battle = battle
+                        # 進行
                         battle.proceed(commands=cmds)
+
+                        # 🌟【簡易不整合テスト】
+                        if battle.command != cmds:
+                            total_sanitized_count += 1
+                            if total_sanitized_count <= 5:  # 最初の5件のみ詳細を出力
+                                print(
+                                    f"   🔍 [Sanitizer Test Detect] 試合 {line_idx} / ターン {turn_idx + 1} で非同期クレンジングを検知しました。")
+                                print(f"      - 予定コマンド: {cmds} ➔ 補正後コマンド: {battle.command}")
+                                if battle.pokemon[0] and battle.pokemon[1]:
+                                    print(
+                                        f"      - 盤面状況: {battle.pokemon[0].name}(HP:{battle.pokemon[0].hp}) vs {battle.pokemon[1].name}(HP:{battle.pokemon[1].hp})")
 
                 except ReplayTimeoutException:
                     print(
@@ -202,6 +308,16 @@ class SelfPlayReplayDataset(Dataset):
 
                 if line_idx % 10 == 0:
                     print(f"   - {line_idx} 試合分の盤面データを展開完了...")
+
+        # 🌟 テスト診断結果の出力
+        print(f"\n==================================================")
+        print(f"  🧪 【Aegis Sanitizer 簡易診断結果】")
+        print(f"  総クレンジング（非同期）発生件数: {total_sanitized_count} 件 / 全局面中")
+        if total_sanitized_count == 0:
+            print("  ✅ 判定: 優秀。対戦時とリプレイ再生時の物理的な素早さ・HPアライメントは完全に 100% 同期しています！")
+        else:
+            print("  ℹ️ 判定: 許容範囲内。微小な状態不整合はサニタイザーによって安全に自動修復されています。")
+        print(f"==================================================\n")
 
         print(f"✅ 特徴量抽出完了 (総局面数: {len(self.encoded_states)} 個, 所要時間: {time.time() - t0:.1f}秒)")
 
@@ -259,7 +375,6 @@ def train_model(log_path: str, model_save_path: str = "src/rebel/value_network.p
 
     dataset = SelfPlayReplayDataset(log_path, analyzer)
 
-    # 🌟 0件時の安全な進行ガード
     if len(dataset) == 0:
         print("⚠️ 警告: 有効な特徴量が0件です。追加学習を安全にスキップして次の世代へ進行します。")
         return

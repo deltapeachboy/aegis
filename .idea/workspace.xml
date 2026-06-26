@@ -4,269 +4,18 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="4d7b8463-7aea-4e94-a428-df954a127bac" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/.gitignore" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/PythonProject7.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/PythonProject7.iml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/inspectionProfiles/Project_Default.xml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/vcs.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/battle_data/meta_evolution_report_gen192.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/battle_data/meta_evolution_report_gen223.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/battle_data/meta_evolution_report_gen75.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/meta_weights.json" beforeDir="false" afterPath="$PROJECT_DIR$/log/meta_weights.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen10_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen10_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen10_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen11_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen11_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen11_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen12_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen12_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen12_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen13_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen13_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen13_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen14_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen14_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen14_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen15_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen15_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen15_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen16_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen16_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen16_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen17_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen17_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen17_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen18_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen18_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen18_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen19_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen19_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen19_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen1_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen1_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen1_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen20_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen20_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen20_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen21_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen21_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen21_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen22_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen22_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen22_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen23_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen23_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen23_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen24_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen24_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen24_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen25_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen25_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen25_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen26_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen26_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen26_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen27_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen27_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen27_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen28_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen28_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen28_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen29_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen29_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen29_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen2_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen2_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen2_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen30_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen30_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen30_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen31_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen31_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen31_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen32_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen32_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen32_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen33_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen33_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen33_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen34_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen34_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen34_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen35_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen35_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen35_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen36_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen36_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen36_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen37_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen37_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen37_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen38_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen38_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen38_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen39_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen39_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen39_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen3_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen3_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen3_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen40_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen40_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen40_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen41_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen41_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen41_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen42_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen42_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen42_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen43_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen43_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen43_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen44_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen44_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen44_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen45_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen45_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen45_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen46_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen46_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen46_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen47_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen47_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen47_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen48_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen48_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen48_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen49_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen49_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen49_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen4_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen4_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen4_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen50_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen50_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen50_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen51_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen51_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen51_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen52_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen52_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen52_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen53_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen53_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen53_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen54_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen54_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen54_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen55_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen55_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen55_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen56_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen56_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen56_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen57_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen57_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen57_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen58_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen58_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen58_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen59_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen59_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen59_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen5_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen5_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen5_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen60_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen60_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen60_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen61_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen61_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen61_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen62_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen62_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen62_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen6_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen6_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen6_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen7_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen7_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen7_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen8_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen8_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen8_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen9_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen9_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen9_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_rank1.json" beforeDir="false" afterPath="$PROJECT_DIR$/log/party_rank1.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_rank2.json" beforeDir="false" afterPath="$PROJECT_DIR$/log/party_rank2.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_rank3.json" beforeDir="false" afterPath="$PROJECT_DIR$/log/party_rank3.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_1.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_10.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_11.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_12.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_13.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_14.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_15.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_16.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_17.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_18.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_19.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_2.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_20.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_21.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_22.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_23.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_24.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_25.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_26.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_27.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_28.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_29.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_3.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_30.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_31.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_32.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_33.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_34.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_35.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_36.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_37.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_38.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_39.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_4.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_40.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_41.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_42.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_43.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_44.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_45.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_46.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_47.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_48.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_49.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_5.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_50.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_51.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_52.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_53.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_54.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_55.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_56.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_57.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_58.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_59.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_6.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_60.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_61.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_62.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_63.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_7.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_8.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_9.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/rebel/value_network.pth" beforeDir="false" afterPath="$PROJECT_DIR$/src/rebel/value_network.pth" afterDir="false" />
+    <list default="true" id="4d7b8463-7aea-4e94-a428-df954a127bac" name="Changes" comment="sn">
+      <change beforePath="$PROJECT_DIR$/battle_data/mb_learnset.json" beforeDir="false" afterPath="$PROJECT_DIR$/battle_data/mb_learnset.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/meta_weights.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party.log" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_rank1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_rank2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_rank3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/run_meta_evolution.py" beforeDir="false" afterPath="$PROJECT_DIR$/run_meta_evolution.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/rebel/cfr_solver.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/rebel/cfr_solver.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/rebel/value_network.pth" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/rebel/value_network.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/rebel/value_network.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/train_value_network.py" beforeDir="false" afterPath="$PROJECT_DIR$/train_value_network.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -348,6 +97,19 @@
       <option name="presentableId" value="Default" />
       <updated>1782407176804</updated>
     </task>
+    <task id="LOCAL-00001" summary="sn">
+      <option name="closed" value="true" />
+      <created>1782472390119</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1782472390119</updated>
+    </task>
+    <option name="localTasksCounter" value="2" />
     <servers />
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="sn" />
+    <option name="LAST_COMMIT_MESSAGE" value="sn" />
   </component>
 </project>

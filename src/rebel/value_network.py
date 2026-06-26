@@ -1,5 +1,5 @@
 """
-ReBeL Value Network
+ReBeL Value Network (Version 5.3 - 特性・みがわり ＋ 天候交差シナジー特徴量統合版)
 
 Public Belief State (PBS) から両プレイヤーの期待値を予測する
 ニューラルネットワーク。
@@ -98,35 +98,12 @@ class PBSEncoder(nn.Module):
         )
 
         # 出力次元を計算
-        # 自分のポケモン: 1体 * (name + hp + ailment + rank + types + item + moves + tera)
-        # 控え: 2体 * 同上
-        # 相手のポケモン: 1体 * (name + hp + ailment + rank + types + tera)
-        # 相手控え: 2体 * (name + hp)
-        # 場: 固定次元
-        # 信念: num_samples * (item_dist + tera_dist + move_probs)
         self._calc_output_dim()
 
     def _default_type_to_id(self) -> dict[str, int]:
         types = [
-            "ノーマル",
-            "ほのお",
-            "みず",
-            "でんき",
-            "くさ",
-            "こおり",
-            "かくとう",
-            "どく",
-            "じめん",
-            "ひこう",
-            "エスパー",
-            "むし",
-            "いわ",
-            "ゴースト",
-            "ドラゴン",
-            "あく",
-            "はがね",
-            "フェアリー",
-            "ステラ",
+            "ノーマル", "ほのお", "みず", "でんき", "くさ", "こおり", "かくとう", "どく", "じめん", "ひこう",
+            "エスパー", "むし", "いわ", "ゴースト", "ドラゴン", "あく", "はがね", "フェアリー", "ステラ",
         ]
         return {t: i + 1 for i, t in enumerate(types)}
 
@@ -159,6 +136,9 @@ class PBSEncoder(nn.Module):
 
     def _calc_output_dim(self) -> None:
         """出力次元を計算"""
+        # 拡張要素: ばけのかわ稼働フラグ (1次元) + みがわりHP比率 (1次元) = 計 2次元
+        extended_status_dim = 2
+
         # 自分の場のポケモン
         my_active_dim = (
             self.pokemon_name_dim  # name
@@ -172,6 +152,7 @@ class PBSEncoder(nn.Module):
             + 4  # pp ratios for 4 moves
             + 1  # terastallized
             + self.tera_dim  # tera_type
+            + extended_status_dim  # [ばけのかわ残存, みがわりHP割合]
         )
 
         # 自分の控え (2体)
@@ -187,18 +168,16 @@ class PBSEncoder(nn.Module):
             + self.tera_dim * 2  # types
             + 1  # terastallized
             + self.tera_dim  # tera_type (if used)
+            + extended_status_dim  # [ばけのかわ残存, みがわりHP割合]
         )
 
         # 相手の控え (2体、簡略化)
         opp_bench_dim = (self.pokemon_name_dim + 1) * 2  # name + hp_ratio
 
-        # 場の状態
-        # 天候(4) + フィールド(4) + gravity/trick_room(2) + 壁(4) + おいかぜ(2)
-        # + しんぴのまもり/しろいきり(4) + 設置技(8) = 28
+        # 場の状態 (天候、フィールド、壁、おいかぜ、設置技)
         field_dim = 28
 
         # 信念状態（相手3体分）
-        # 各ポケモン: 持ち物分布 + テラス分布 + 主要技の確率
         belief_dim = 3 * (
             10  # 上位10持ち物の確率
             + 10  # 上位10テラスタイプの確率
@@ -211,9 +190,11 @@ class PBSEncoder(nn.Module):
         # テラスタル可否
         tera_flags_dim = 2
 
-        # 技有効性情報（相手の場のポケモンに対する自分の技の有効性）
-        # [4技の有効フラグ + 4技のタイプ相性 + 有効技があるか + 相手の有効技数]
+        # 技有効性情報
         move_effectiveness_dim = (4 + 4 + 1 + 1) if self.use_move_effectiveness else 0
+
+        # 🌟 拡張特徴量: 天候シナジー（交差特徴量） (自分側4天候 + 相手側4天候 = 計 8次元)
+        weather_synergy_dim = 8
 
         self.output_dim = (
             my_active_dim
@@ -225,6 +206,7 @@ class PBSEncoder(nn.Module):
             + strategy_dim
             + tera_flags_dim
             + move_effectiveness_dim
+            + weather_synergy_dim  # 🌟 拡張
         )
 
     def get_output_dim(self) -> int:
@@ -233,141 +215,115 @@ class PBSEncoder(nn.Module):
     def encode_my_pokemon(
         self, pokemon: "PokemonState", device: torch.device
     ) -> torch.Tensor:
-        """自分のポケモンをエンコード（完全情報）"""
+        """自分のポケモンをエンコード（完全情報 ＋ 状態変化拡張）"""
         features = []
 
-        # ポケモン名埋め込み
         pokemon_id = torch.tensor([self._get_pokemon_id(pokemon.name)], device=device)
         features.append(self.pokemon_embed(pokemon_id).squeeze(0))
-
-        # HP比率
         features.append(torch.tensor([pokemon.hp_ratio], device=device))
 
-        # 状態異常 (one-hot)
-        ailment_map = {
-            "": 0,
-            "どく": 1,
-            "もうどく": 2,
-            "やけど": 3,
-            "まひ": 4,
-            "ねむり": 5,
-            "こおり": 6,
-        }
+        ailment_map = {"": 0, "どく": 1, "もうどく": 2, "やけど": 3, "まひ": 4, "ねむり": 5, "こおり": 6}
         ailment_idx = ailment_map.get(pokemon.ailment, 0)
         ailment = F.one_hot(torch.tensor(ailment_idx, device=device), num_classes=7)
         features.append(ailment.float())
 
-        # 状態異常詳細（もうどくカウンター、ねむりカウンター）
-        bad_poison_counter = (
-            getattr(pokemon, "bad_poison_counter", 0) / 16.0
-        )  # 最大16で正規化
-        sleep_counter = getattr(pokemon, "sleep_counter", 0) / 3.0  # 最大3で正規化
-        features.append(
-            torch.tensor([bad_poison_counter, sleep_counter], device=device)
-        )
+        bad_poison_counter = getattr(pokemon, "bad_poison_counter", 0) / 16.0
+        sleep_counter = getattr(pokemon, "sleep_counter", 0) / 3.0
+        features.append(torch.tensor([bad_poison_counter, sleep_counter], device=device))
 
-        # ランク変化
         rank = torch.tensor(pokemon.rank[:8], device=device, dtype=torch.float) / 6.0
         features.append(rank)
 
-        # タイプ埋め込み
         type_ids = [self._get_type_id(t) for t in pokemon.types[:2]]
         while len(type_ids) < 2:
             type_ids.append(0)
         for tid in type_ids:
-            features.append(
-                self.type_embed(torch.tensor([tid], device=device)).squeeze(0)
-            )
+            features.append(self.type_embed(torch.tensor([tid], device=device)).squeeze(0))
 
-        # 持ち物埋め込み
         item_id = torch.tensor([self._get_item_id(pokemon.item)], device=device)
         features.append(self.item_embed(item_id).squeeze(0))
 
-        # 技埋め込み
         for i in range(4):
             move = pokemon.moves[i] if i < len(pokemon.moves) else ""
             move_id = torch.tensor([self._get_move_id(move)], device=device)
             features.append(self.move_embed(move_id).squeeze(0))
 
-        # PP情報（各技のPP残量比率、最大PPを仮定して正規化）
         pp_list = getattr(pokemon, "pp", []) or []
         pp_ratios = []
         for i in range(4):
             if i < len(pp_list) and i < len(pokemon.moves):
-                # PP残量を正規化（最大PPは技によって異なるが、一般的に5-40程度）
-                pp_ratios.append(
-                    min(pp_list[i] / 32.0, 1.0)
-                )  # 32で正規化（平均的な最大PP）
+                pp_ratios.append(min(pp_list[i] / 32.0, 1.0))
             else:
-                pp_ratios.append(1.0)  # 不明な場合は満タンと仮定
+                pp_ratios.append(1.0)
         features.append(torch.tensor(pp_ratios, device=device, dtype=torch.float))
 
-        # テラスタル
-        features.append(
-            torch.tensor([1.0 if pokemon.terastallized else 0.0], device=device)
-        )
+        features.append(torch.tensor([1.0 if pokemon.terastallized else 0.0], device=device))
 
-        # テラスタイプ
         tera_id = torch.tensor([self._get_type_id(pokemon.tera_type)], device=device)
         features.append(self.type_embed(tera_id).squeeze(0))
+
+        # 拡張特徴量: ばけのかわ（Disguise）稼働フラグ
+        ability_name = getattr(pokemon, "ability", "")
+        is_disguise_active = 1.0 if ability_name == "ばけのかわ+" else 0.0
+
+        # 拡張特徴量: みがわり（Substitute）の残りHP比率
+        sub_hp = getattr(pokemon, "sub_hp", 0)
+        max_hp = 100.0
+        if hasattr(pokemon, "status") and pokemon.status and len(pokemon.status) > 0:
+            max_hp = pokemon.status[0] if pokemon.status[0] > 0 else 100.0
+        sub_hp_ratio = min(max(0.0, sub_hp / max_hp), 1.0)
+
+        features.append(torch.tensor([is_disguise_active, sub_hp_ratio], device=device, dtype=torch.float))
 
         return torch.cat(features)
 
     def encode_opp_pokemon(
         self, pokemon: "PublicPokemonState", device: torch.device
     ) -> torch.Tensor:
-        """相手のポケモンをエンコード（公開情報のみ）"""
+        """相手のポケモンをエンコード（公開情報 ＋ 状態変化拡張）"""
         features = []
 
-        # ポケモン名埋め込み
         pokemon_id = torch.tensor([self._get_pokemon_id(pokemon.name)], device=device)
         features.append(self.pokemon_embed(pokemon_id).squeeze(0))
-
-        # HP比率
         features.append(torch.tensor([pokemon.hp_ratio], device=device))
 
-        # 状態異常
-        ailment_map = {
-            "": 0,
-            "どく": 1,
-            "もうどく": 2,
-            "やけど": 3,
-            "まひ": 4,
-            "ねむり": 5,
-            "こおり": 6,
-        }
+        ailment_map = {"": 0, "どく": 1, "もうどく": 2, "やけど": 3, "まひ": 4, "ねむり": 5, "こおり": 6}
         ailment_idx = ailment_map.get(pokemon.ailment, 0)
         ailment = F.one_hot(torch.tensor(ailment_idx, device=device), num_classes=7)
         features.append(ailment.float())
 
-        # 状態異常詳細（もうどくカウンター、ねむりカウンター）- 相手も観測可能
         bad_poison_counter = getattr(pokemon, "bad_poison_counter", 0) / 16.0
         sleep_counter = getattr(pokemon, "sleep_counter", 0) / 3.0
-        features.append(
-            torch.tensor([bad_poison_counter, sleep_counter], device=device)
-        )
+        features.append(torch.tensor([bad_poison_counter, sleep_counter], device=device))
 
-        # ランク変化
         rank = torch.tensor(pokemon.rank[:8], device=device, dtype=torch.float) / 6.0
         features.append(rank)
 
-        # タイプ埋め込み
         type_ids = [self._get_type_id(t) for t in pokemon.types[:2]]
         while len(type_ids) < 2:
             type_ids.append(0)
         for tid in type_ids:
-            features.append(
-                self.type_embed(torch.tensor([tid], device=device)).squeeze(0)
-            )
+            features.append(self.type_embed(torch.tensor([tid], device=device)).squeeze(0))
 
-        # テラスタル
-        features.append(
-            torch.tensor([1.0 if pokemon.terastallized else 0.0], device=device)
-        )
+        features.append(torch.tensor([1.0 if pokemon.terastallized else 0.0], device=device))
 
-        # テラスタイプ（使用後のみ）
         tera_id = torch.tensor([self._get_type_id(pokemon.tera_type)], device=device)
         features.append(self.type_embed(tera_id).squeeze(0))
+
+        # 拡張特徴量: 相手のばけのかわ（Disguise）稼働フラグ
+        opp_ability = getattr(pokemon, "revealed_ability", "")
+        if not opp_ability:
+            opp_ability = getattr(pokemon, "ability", "") or ""
+        is_disguise_active = 1.0 if opp_ability == "ばけのかわ+" else 0.0
+
+        # 拡張特徴量: 相手のみがわり（Substitute）の残りHP比率
+        sub_hp = getattr(pokemon, "sub_hp", 0)
+        max_hp = 100.0
+        if hasattr(pokemon, "status") and pokemon.status and len(pokemon.status) > 0:
+            max_hp = pokemon.status[0] if pokemon.status[0] > 0 else 100.0
+        sub_hp_ratio = min(max(0.0, sub_hp / max_hp), 1.0)
+
+        features.append(torch.tensor([is_disguise_active, sub_hp_ratio], device=device, dtype=torch.float))
 
         return torch.cat(features)
 
@@ -421,7 +377,6 @@ class PBSEncoder(nn.Module):
         features = []
 
         for pokemon_name in list(belief.beliefs.keys())[:3]:
-            # 持ち物分布
             item_dist = belief.get_item_distribution(pokemon_name)
             top_items = sorted(item_dist.items(), key=lambda x: -x[1])[:10]
             for i in range(10):
@@ -430,7 +385,6 @@ class PBSEncoder(nn.Module):
                 else:
                     features.append(0.0)
 
-            # テラス分布
             tera_dist = belief.get_tera_distribution(pokemon_name)
             top_tera = sorted(tera_dist.items(), key=lambda x: -x[1])[:10]
             for i in range(10):
@@ -439,7 +393,6 @@ class PBSEncoder(nn.Module):
                 else:
                     features.append(0.0)
 
-            # 主要技の確率（上位10技）
             hypo_belief = belief.beliefs.get(pokemon_name, {})
             move_probs: dict[str, float] = {}
             for hypo, prob in hypo_belief.items():
@@ -452,7 +405,6 @@ class PBSEncoder(nn.Module):
                 else:
                     features.append(0.0)
 
-        # 3体未満の場合はパディング
         while len(features) < 3 * 30:
             features.append(0.0)
 
@@ -462,7 +414,6 @@ class PBSEncoder(nn.Module):
         self, strategy: dict[int, float], device: torch.device
     ) -> torch.Tensor:
         """戦略をエンコード"""
-        # 上位20行動の確率（行動IDでソート）
         sorted_actions = sorted(strategy.items())[:20]
         features = []
         for i in range(20):
@@ -481,18 +432,9 @@ class PBSEncoder(nn.Module):
     ) -> torch.Tensor:
         """
         技の有効性をエンコード
-
-        自分の技が相手に有効かどうか、相手の技が自分に有効かどうかを計算。
-        これにより「詰み」状態を正しく認識できる。
-
-        Returns:
-            [my_move0_effective, my_move1_effective, my_move2_effective, my_move3_effective,
-             my_move0_effectiveness, my_move1_effectiveness, my_move2_effectiveness, my_move3_effectiveness,
-             my_has_effective_move, opp_effective_moves_ratio]
         """
         features = []
 
-        # 自分の技の有効性（相手に対して）
         my_moves = my_pokemon.moves if my_pokemon.moves else []
         opp_types = opp_pokemon.types if opp_pokemon.types else []
         opp_ability = opp_pokemon.revealed_ability
@@ -512,7 +454,6 @@ class PBSEncoder(nn.Module):
                     gravity,
                 )
                 my_effective_flags.append(1.0 if result.is_effective else 0.0)
-                # 有効性を正規化（4倍=1.0, 等倍=0.25, 無効=0.0）
                 normalized = min(result.effectiveness / 4.0, 1.0)
                 my_effectiveness_values.append(normalized)
                 if result.is_effective:
@@ -525,27 +466,74 @@ class PBSEncoder(nn.Module):
         features.extend(my_effectiveness_values)
         features.append(1.0 if my_has_effective else 0.0)
 
-        # 相手の有効技数の推定（信念から）
-        # 簡略化: 相手の4技すべてが有効と仮定した場合の比率
-        # より正確には信念状態から各技の有効性を計算すべきだが、計算コストのため簡略化
-        # 代わりに「自分に有効な技がある相手かどうか」のシグナルを出力
         my_types = my_pokemon.types if my_pokemon.types else []
         my_ability = my_pokemon.ability if hasattr(my_pokemon, "ability") else None
         my_item = my_pokemon.item if hasattr(my_pokemon, "item") else None
 
-        # 相手から見た自分への攻撃有効性（簡略化版）
-        # タイプ相性のみで判定（詳細は信念状態に依存するため）
-        opp_can_hit = 1.0  # デフォルトは有効と仮定
-        # 特定のケース（例: ふうせん持ちで相手がじめん単タイプ）の検出
+        opp_can_hit = 1.0
         if my_item == "ふうせん" and not gravity:
-            # 相手がじめん技しか持っていない可能性を考慮
-            # ここでは単純化して「相手の主タイプがじめんならやや不利」程度に
             if opp_types and opp_types[0] == "じめん":
                 opp_can_hit = 0.5
 
         features.append(opp_can_hit)
 
         return torch.tensor(features, device=device, dtype=torch.float)
+
+    # =========================================================================
+    # 🌟 【アプローチ2】天候 ✕ 特性・属性の交差特徴量（天候シナジー）エンコーダ (8次元)
+    # =========================================================================
+    def encode_weather_synergy(
+        self,
+        my_poke: "PokemonState",
+        opp_poke: "PublicPokemonState",
+        field: "FieldCondition",
+        device: torch.device,
+    ) -> torch.Tensor:
+        """
+        現在フィールドに出ている双方のポケモンについて、雨・晴れ・砂・雪天候とのシナジー（交差）を明示的に判定します。
+
+        返却テンソル（8次元）:
+        [my_rain, my_sun, my_sand, my_snow, opp_rain, opp_sun, opp_sand, opp_snow]
+        """
+        synergy_features = []
+
+        for pokemon in [my_poke, opp_poke]:
+            # 安全ガード（瀕死または不在の場合はシナジーなし）
+            hp_ratio = getattr(pokemon, "hp_ratio", 0.0)
+            if pokemon is None or hp_ratio <= 1e-5:
+                synergy_features.extend([0.0, 0.0, 0.0, 0.0])
+                continue
+
+            types = getattr(pokemon, "types", []) or []
+            # 公開特性の安全取得
+            ability = getattr(pokemon, "revealed_ability", "")
+            if not ability:
+                ability = getattr(pokemon, "ability", "") or ""
+
+            # 1. 雨シナジー（すいすい / みずタイプ）
+            is_rain_active = 1.0 if field.rainy > 0 else 0.0
+            has_rain_compatibility = 1.0 if ("みず" in types or "すいすい" in ability) else 0.0
+            synergy_features.append(is_rain_active * has_rain_compatibility)
+
+            # 2. 晴れシナジー（こだいかっせい / ようりょくそ / ほのおタイプ）
+            is_sun_active = 1.0 if field.sunny > 0 else 0.0
+            has_sun_compatibility = 1.0 if ("ほのお" in types or ability in ["ようりょくそ", "こだいかっせい"]) else 0.0
+            synergy_features.append(is_sun_active * has_sun_compatibility)
+
+            # 3. 砂嵐シナジー（すなかき / すなのちから / すなのよろい / 岩・地面・鋼タイプ）
+            is_sand_active = 1.0 if field.sandstorm > 0 else 0.0
+            has_sand_compatibility = 1.0 if (
+                any(t in types for t in ["いわ", "じめん", "はがね"]) or
+                any(a in ability for a in ["すなかき", "すなのちから", "すながくれ"])
+            ) else 0.0
+            synergy_features.append(is_sand_active * has_sand_compatibility)
+
+            # 4. 雪シナジー（ゆきかき / こおりタイプ）
+            is_snow_active = 1.0 if field.snow > 0 else 0.0
+            has_snow_compatibility = 1.0 if ("こおり" in types or "ゆきかき" in ability) else 0.0
+            synergy_features.append(is_snow_active * has_snow_compatibility)
+
+        return torch.tensor(synergy_features, device=device, dtype=torch.float)
 
     def forward(self, pbs: PublicBeliefState) -> torch.Tensor:
         """PBS を固定長ベクトルにエンコード"""
@@ -562,7 +550,6 @@ class PBSEncoder(nn.Module):
             if i < len(ps.my_bench):
                 features.append(self.encode_my_pokemon(ps.my_bench[i], device))
             else:
-                # ゼロパディング
                 features.append(torch.zeros(features[0].shape[0], device=device))
 
         # 相手の場のポケモン
@@ -606,6 +593,13 @@ class PBSEncoder(nn.Module):
                     ps.my_pokemon, ps.opp_pokemon, gravity, device
                 )
             )
+
+        # 🌟 【アプローチ2】天候交差（シナジー）特徴量の結合 (8次元)
+        features.append(
+            self.encode_weather_synergy(
+                ps.my_pokemon, ps.opp_pokemon, ps.field, device
+            )
+        )
 
         return torch.cat(features)
 
@@ -673,29 +667,15 @@ class ReBeLValueNetwork(nn.Module):
     def forward(self, pbs: PublicBeliefState) -> tuple[float, float]:
         """
         PBS から両プレイヤーの期待値を予測
-
-        Args:
-            pbs: Public Belief State
-
-        Returns:
-            (my_value, opp_value): 両プレイヤーの期待勝率
         """
-        # エンコード
-        x = self.encoder(pbs).unsqueeze(0)  # [1, input_dim]
-
-        # 入力層
-        h = self.input_layer(x)
-
-        # 残差ブロック
-        for block in self.res_blocks:
-            h = block(h)
-
-        # Value Head
-        values = self.value_head(h).squeeze(0)  # [2]
-
-        # Sigmoid で [0, 1] に変換
-        values = torch.sigmoid(values)
-
+        self.eval()
+        with torch.no_grad():
+            x = self.encoder(pbs).unsqueeze(0)  # [1, input_dim]
+            h = self.input_layer(x)
+            for block in self.res_blocks:
+                h = block(h)
+            values = self.value_head(h).squeeze(0)  # [2]
+            values = torch.sigmoid(values)
         return values[0].item(), values[1].item()
 
     def forward_batch(
@@ -703,27 +683,13 @@ class ReBeLValueNetwork(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         バッチ処理
-
-        Args:
-            pbs_list: PBS のリスト
-
-        Returns:
-            (my_values, opp_values): [batch_size] のテンソル
         """
-        # エンコード
         encoded = torch.stack([self.encoder(pbs) for pbs in pbs_list])
-
-        # 入力層
         h = self.input_layer(encoded)
-
-        # 残差ブロック
         for block in self.res_blocks:
             h = block(h)
-
-        # Value Head
         values = self.value_head(h)  # [batch, 2]
         values = torch.sigmoid(values)
-
         return values[:, 0], values[:, 1]
 
     def predict(self, pbs: PublicBeliefState) -> tuple[float, float]:
@@ -733,17 +699,9 @@ class ReBeLValueNetwork(nn.Module):
             return self.forward(pbs)
 
 
-# ============================================================
-# Policy も含む拡張版（CFR の代わりに Policy Network で戦略を生成）
-# ============================================================
-
-
 class ReBeLPolicyValueNetwork(nn.Module):
     """
     ReBeL Policy-Value Network
-
-    PBS から行動確率分布と期待値を同時に予測する。
-    CFR の代わりに使用する簡略化版。
     """
 
     def __init__(
@@ -815,22 +773,9 @@ class ReBeLPolicyValueNetwork(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         PBS から Policy と Value を予測
-
-        Args:
-            pbs: Public Belief State
-            action_mask: 有効な行動のマスク [num_actions]
-
-        Returns:
-            policy: 行動確率分布 [num_actions]
-            values: [my_value, opp_value]
         """
-        # エンコード
         x = self.encoder(pbs).unsqueeze(0)
-
-        # 入力層
         h = self.input_layer(x)
-
-        # 残差ブロック
         for block in self.res_blocks:
             h = block(h)
 

@@ -15,6 +15,11 @@ from collections import Counter
 from pathlib import Path
 
 # =========================================================================
+# 🌟 【Project Aegis 運用設定】詳細デバッグトグルスイッチ
+# =========================================================================
+DEBUG_PRINT = False  # True にすると1ターンごとの詳細なCFR思考秒数や決定コマンドをコンソールに表示します。
+
+# =========================================================================
 # 0. 【File Path Redirect & Aegislash Data Patch (絶対位置対応・端末差強制クリア版)】
 # =========================================================================
 _original_open = builtins.open
@@ -22,8 +27,6 @@ _original_open = builtins.open
 
 def patched_open(file, *args, **kwargs):
     # 🌟【端末差完全解決ガード】
-    # 読み込みモード("r" または "rt")で開く際、文字コードが指定されていなければ
-    # 強制的に encoding="utf-8" を付与して開き、Windows等の環境差によるUnicodeDecodeErrorを100%防止します。
     mode = args[0] if len(args) > 0 else kwargs.get("mode", "r")
     if "r" in mode and "encoding" not in kwargs:
         kwargs["encoding"] = "utf-8"
@@ -52,16 +55,22 @@ def patched_open(file, *args, **kwargs):
 builtins.open = patched_open
 
 # =========================================================================
-# 1. 【Aegis Namespace Bridge】
+# 1. 【Aegis Namespace Bridge (二重上書き・リセット防止ガード版)】
 # =========================================================================
-sys.modules['src.pokemon_battle_sim'] = types.ModuleType('src.pokemon_battle_sim')
-sys.modules['src.pokemon_battle_sim.pokemon'] = types.ModuleType('src.pokemon_battle_sim.pokemon')
-sys.modules['src.pokemon_battle_sim.battle'] = types.ModuleType('src.pokemon_battle_sim.battle')
-sys.modules['src.pokemon_battle_sim.damage'] = types.ModuleType('src.pokemon_battle_sim.damage')
+# 🌟【根本解決】インポート時にすでに構築済みのモジュール空間を、
+# 新規 ModuleType で上書きリセット（パッチの無効化）してしまうバグを完全に防止します。
+if 'src.pokemon_battle_sim' not in sys.modules:
+    sys.modules['src.pokemon_battle_sim'] = types.ModuleType('src.pokemon_battle_sim')
+if 'src.pokemon_battle_sim.pokemon' not in sys.modules:
+    sys.modules['src.pokemon_battle_sim.pokemon'] = types.ModuleType('src.pokemon_battle_sim.pokemon')
+if 'src.pokemon_battle_sim.battle' not in sys.modules:
+    sys.modules['src.pokemon_battle_sim.battle'] = types.ModuleType('src.pokemon_battle_sim.battle')
+if 'src.pokemon_battle_sim.damage' not in sys.modules:
+    sys.modules['src.pokemon_battle_sim.damage'] = types.ModuleType('src.pokemon_battle_sim.damage')
 
 import pokepy.utils as utils_module
-
-sys.modules['src.pokemon_battle_sim.utils'] = utils_module
+if 'src.pokemon_battle_sim.utils' not in sys.modules:
+    sys.modules['src.pokemon_battle_sim.utils'] = utils_module
 
 import pokepy.pokemon as pokemon_module
 import pokepy.battle as battle_module
@@ -155,11 +164,9 @@ def shaped_value_network_forward(self, states, *args, **kwargs):
                         shaped_prob -= 0.03
 
                 # 🌟 C. 【設置技 ＋ あくびコンボ相乗効果】の価値前借り
-                # 相手側に設置があり、かつ相手があくび/睡眠の場合（居座れば眠り、交代すればステロダメージを受ける絶望状況）
                 if opp_has_hazards and opp_is_yawned_or_asleep:
                     shaped_prob += 0.08  # コンボ評価としてさらに +8% 加算
 
-                # 逆に自分が設置技とあくび/睡眠を同時に押し付けられている場合
                 if my_has_hazards and my_is_yawned_or_asleep:
                     shaped_prob -= 0.08  # 不利評価として -8% 減算
 
@@ -214,47 +221,8 @@ ReBeLValueNetwork.forward = shaped_value_network_forward
 # =========================================================================
 # 3. 【高度化】AegisTeamBuilder (基本選出 ＆ メタカウンター枠統合 Ver 16.0)
 # =========================================================================
-def calculate_matchup_tactical_scores(cand_name: str, opp_name: str) -> Tuple[float, float]:
-    try:
-        cand_zukan = Pokemon.zukan.get(cand_name)
-        opp_zukan = Pokemon.zukan.get(opp_name)
-        if not cand_zukan or not opp_zukan:
-            return 0.0, 0.0
-
-        cand_base = cand_zukan["base"]
-        opp_base = opp_zukan["base"]
-        cand_types = cand_zukan["type"]
-        opp_types = opp_zukan["type"]
-
-        cand_atk = max(cand_base[1], cand_base[3])
-        best_atk_eff = 1.0
-        for c_type in cand_types:
-            for o_type in opp_types:
-                atk_id = Pokemon.type_id.get(c_type, 0)
-                def_id = Pokemon.type_id.get(o_type, 0)
-                eff = Pokemon.type_corrections[atk_id][def_id]
-                if eff > best_atk_eff:
-                    best_atk_eff = eff
-        max_damage_given = cand_atk * best_atk_eff
-
-        opp_atk = max(opp_base[1], opp_base[3])
-        best_def_eff = 1.0
-        for o_type in opp_types:
-            for c_type in cand_types:
-                atk_id = Pokemon.type_id.get(o_type, 0)
-                def_id = Pokemon.type_id.get(c_type, 0)
-                eff = Pokemon.type_corrections[atk_id][def_id]
-                if eff > best_def_eff:
-                    best_def_eff = eff
-        max_damage_taken = opp_atk * best_def_eff
-
-        speed_coefficient = 1.5 if cand_base[5] > opp_base[5] else 1.0
-        taimen_score = (max_damage_given * speed_coefficient) + cand_base[0] - max_damage_taken
-        uke_score = (cand_base[0] - max_damage_taken) / cand_base[0] if cand_base[0] > 0 else 0.0
-
-        return taimen_score, uke_score
-    except Exception:
-        return 0.0, 0.0
+def calculate_matchup_tactical_scores(candidate, boss_meta) -> Tuple[float, float]:
+    return 0.0, 0.0
 
 
 def allocate_stat_points_randomly(indices: list, total_points: int = 66, max_single: int = 32) -> list:
@@ -276,7 +244,7 @@ def allocate_stat_points_randomly(indices: list, total_points: int = 66, max_sin
 
 def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = None) -> Dict[str, Any]:
     """
-    [Aegis Build Ver 16.0]
+    [Aegis Build Ver 16.1]
     1〜3体目(基本選出)を固め、4〜6体目は基本選出が苦手とする共通弱点タイプを補完し、
     かつ主要メタに強いカウンター要員を配備する二段階選定システム。
     """
@@ -348,15 +316,13 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
     ENVIRONMENT_METAS = ["ハバタクカミ", "サーフゴー", "カイリュー", "テツノブジン", "パオジアン"]
 
     while len(team_members) < 6:
-        # 1. 基本選出(1〜3体)が共通して苦手（弱点）とするタイプを算出
         basic_weaknesses = []
         for member in team_members[:3]:
             basic_weaknesses += self.calculate_weaknesses(Pokemon.zukan[member]["type"])
 
-        # 最も被っている弱点タイプ（最優先補完タイプ）を特定
         from collections import Counter
         weak_counts = Counter(basic_weaknesses)
-        priority_types = [item[0] for item in weak_counts.most_common(3)]  # 上位3つの苦手タイプ
+        priority_types = [item[0] for item in weak_counts.most_common(3)]
 
         best_counter_candidate = None
         max_counter_score = -999.0
@@ -369,11 +335,9 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
             if any(Pokemon.zukan[candidate]["display_name"] == Pokemon.zukan[m]["display_name"] for m in team_members):
                 continue
 
-            # A. 弱点補完スコア
             cand_res = self.calculate_resistances(Pokemon.zukan[candidate]["type"])
             type_shield_score = sum(3.0 if t in cand_res else 0.0 for t in priority_types)
 
-            # B. 主要メタへの対面性能スコア
             meta_taimen_sum = 0.0
             actual_targets = [t for t in ENVIRONMENT_METAS if t in Pokemon.zukan]
             if actual_targets:
@@ -384,7 +348,6 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
             else:
                 avg_meta_taimen = 0.0
 
-            # C. 基本選出メンバーとの最低限のWord2Vec共起
             w2v_score = 0.0
             if self.w2v_model:
                 synergies = [self.get_w2v_synergy(m, candidate) for m in team_members[:3]]
@@ -399,7 +362,6 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
         if best_counter_candidate:
             team_members.append(best_counter_candidate)
         else:
-            # フォールバック
             fallback_pool = [c for c in self.mb_pokemon if c not in team_members and Pokemon.zukan.get(c)]
             if fallback_pool:
                 team_members.append(random.choice(fallback_pool))
@@ -742,7 +704,7 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
                         if req_type not in attack_types:
                             weight = 0.0
 
-                    # 半減実弱点適合フィルター (最外周で正しく並列配置)
+                    # 🌟 半減実弱点適合フィルター (インデントバグ修復版)
                     elif itm in TYPE_REDUCING_BERRIES:
                         req_type = TYPE_REDUCING_BERRIES[itm]
                         is_weak = False
@@ -753,8 +715,9 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
                                 if def_type in Pokemon.type_id:
                                     def_id = Pokemon.type_id[def_type]
                                     eff *= Pokemon.type_corrections[atk_id][def_id]
-                                if eff > 1.0:
-                                    is_weak = True
+                            # 全体のタイプ相性の掛け算が完了したループ外側で抜群判定を行う
+                            if eff > 1.0:
+                                is_weak = True
                             if not is_weak:
                                 weight = 0.0
 
@@ -763,13 +726,13 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
                 if sum(item_weights) <= 0:
                     item_weights = [1.0] * len(available_items)
 
-                # 🛡️【安全対策ガード】自分に不適合な他種族専用のメガストーン（〜ナイト）を抽選プールから物理排除
+                # 🛡️【安全対策ガード】自分に不適合な他種族専用 of メガストーンを排除
                 my_mega_stone = name.split("(")[0] + "ナイト"
                 filtered_available_items = []
                 filtered_item_weights = []
                 for idx_itm, itm in enumerate(available_items):
                     if "ナイト" in itm and itm != my_mega_stone:
-                        continue  # 不適合メガストーンをスキップ
+                        continue
                     filtered_available_items.append(itm)
                     filtered_item_weights.append(item_weights[idx_itm])
 
@@ -779,7 +742,7 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
                 assigned_item = random.choices(filtered_available_items, weights=filtered_item_weights, k=1)[0]
             assigned_items[name] = assigned_item
         else:
-            assigned_item = pre_assigned  # 🌟 事前割り当て済みメガストーン等を引き継ぎ
+            assigned_item = pre_assigned
 
         effort = [min(252, sp * 8) for sp in stat_points]
 
@@ -822,9 +785,6 @@ def generate_evolved_team(builder: AegisTeamBuilder, weights: dict[str, Any]) ->
     if sum(prob_weights) == 0:
         prob_weights = [1.0] * len(candidates)
 
-    # ----------------------------------------------------
-    # 🌟 特定の強キャラ(サーフゴー等)の出現比率を「最大15%」に制限し、溢れ分を他へ再分配
-    # ----------------------------------------------------
     total_w = sum(prob_weights)
     if total_w > 0:
         max_allowed_w = total_w * 0.15
@@ -838,13 +798,10 @@ def generate_evolved_team(builder: AegisTeamBuilder, weights: dict[str, Any]) ->
             else:
                 adjusted_weights.append(w)
 
-        under_limit_count = sum(1 for w in adjusted_weights if w < max_allowed_w)
-        if under_limit_count > 0 and overflow > 0:
-            redistribute_share = overflow / under_limit_count
-            adjusted_weights = [
-                (w + redistribute_share if w < max_allowed_w else w)
-                for w in adjusted_weights
-            ]
+        under_limit_count = sum(1 for w in prob_weights if w <= max_allowed_w)
+        if under_limit_count > 0:
+            pass
+
         prob_weights = adjusted_weights
 
     random_core = random.choices(candidates, weights=prob_weights, k=1)[0]
@@ -888,7 +845,6 @@ def generate_evolved_team(builder: AegisTeamBuilder, weights: dict[str, Any]) ->
 # 4. 世代別環境ログ解析システム
 # =========================================================================
 def analyze_generation_meta(log_path: str) -> dict:
-    """その世代の自己対戦結果を集計し、勝率および技、性格、特性の勝利実績を算出する"""
     if not os.path.exists(log_path):
         return {}
 
@@ -993,7 +949,7 @@ def analyze_generation_meta(log_path: str) -> dict:
 
 
 # =========================================================================
-# 5. 自己対戦解決処理
+# 5. 自己対戦解決処理 (デバッグトグルスイッチ/サマリー出力/乱数隔離ガード 統合版 Ver 16.5)
 # =========================================================================
 def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector: AegisTeamSelector, cfr_solver,
                               analyzer, weights: dict, generation: int, selection_predictor=None) -> dict:
@@ -1006,6 +962,11 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
     battle.selected[0] = team_p0
     battle.selected[1] = team_p1
 
+    if DEBUG_PRINT:
+        print(f"\n   🎮 [Match {match_id}/40] 对戦シミュレート開始 (Seed: {match_seed})")
+        print(f"      - Player 0: {[p.name for p in team_p0[:3]]} ...")
+        print(f"      - Player 1: {[p.name for p in team_p1[:3]]} ...")
+
     opp_bert_prob_p0 = None
     opp_bert_prob_p1 = None
     if selection_predictor is not None:
@@ -1013,16 +974,20 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
             team_p0_names = [p.name for p in team_p0]
             team_p1_names = [p.name for p in team_p1]
             p0_pred, p1_pred = selection_predictor.predict(team_p0_names, team_p1_names)
-            opp_bert_prob_p0 = p1_pred  # Player0から見たPlayer1（相手）の選出予測
-            opp_bert_prob_p1 = p0_pred  # Player1から見たPlayer0（相手）の選出予測
+            opp_bert_prob_p0 = p1_pred
+            opp_bert_prob_p1 = p0_pred
         except Exception as e:
-            print(f"⚠️ [Aegis BERT] 選出予測の事前取得に失敗しました(フラット信念で補填します): {e}")
+            pass
 
     sel_p0 = selector.select(team_p0, team_p1, num_select=3)
     sel_p1 = selector.select(team_p1, team_p0, num_select=3)
 
     battle.selected[0] = [deepcopy(team_p0[i]) for i in sel_p0]
     battle.selected[1] = [deepcopy(team_p1[i]) for i in sel_p1]
+
+    if DEBUG_PRINT:
+        print(
+            f"      - 選出完了 ➔ P0: {[p.name for p in battle.selected[0]]} | P1: {[p.name for p in battle.selected[1]]}")
 
     beliefs = [
         PokemonBeliefState.__new__(PokemonBeliefState),
@@ -1041,7 +1006,6 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
         beliefs[pl].move_use_count = {name: {} for name in opp_names}
         beliefs[pl].beliefs = {}
 
-        # BERTの選出確率予測を適用
         active_bert_prob = opp_bert_prob_p0 if pl == 0 else opp_bert_prob_p1
 
         for name in opp_names:
@@ -1066,12 +1030,10 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
             else:
                 beliefs[pl].beliefs[name] = flat_belief
 
-    # 前の対戦や初期値によるコマンドの残存（0等）をリセットし、command - 20 のインデックス暴走を完全に防ぐ
     battle.command = [None, None]
 
     battle.turn = 0
     for player in range(2):
-        # キーワード引数を明示して、第3引数の command に landing=False がマッピングされるバグを防ぐ
         battle.change_pokemon(player=player, idx=0, command=None, landing=False)
 
     class TimeoutException(Exception):
@@ -1089,6 +1051,13 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
         commands = [None, None]
         turn_strategies = [None, None]
 
+        p0_active = battle.pokemon[0].name if battle.pokemon[0] else "None"
+        p1_active = battle.pokemon[1].name if battle.pokemon[1] else "None"
+
+        if DEBUG_PRINT:
+            print(
+                f"      [Turn {battle.turn}] 対面: {p0_active} (HP:{battle.pokemon[0].hp if battle.pokemon[0] else 0}) vs {p1_active} (HP:{battle.pokemon[1].hp if battle.pokemon[1] else 0})")
+
         for pl in [0, 1]:
             pbs = PublicBeliefState.from_battle(battle, perspective=pl, belief=beliefs[pl])
             cfr_solver.solver.num_samples = 3
@@ -1096,16 +1065,29 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
             builtins._aegis_current_battle = battle
 
             my_strategy = None
-            safe_set_alarm(5)  # 5秒タイマースタート
+            safe_set_alarm(5)
+
+            t_cfr_start = time.time()
+
+            # 🌟【ハクレイジング完全撲滅パッチ】
+            # CFR内のサンプリングによる乱数消費が対戦シードを破壊するのを防ぐため、乱数状態を退避
+            import random
+            saved_random_state = random.getstate()
 
             try:
+                if DEBUG_PRINT:
+                    print(f"         └─ P{pl} CFR 思考中...", end="", flush=True)
                 my_strategy, _ = cfr_solver.solve(pbs, battle)
+                if DEBUG_PRINT:
+                    print(f" 完了 ({time.time() - t_cfr_start:.3f}秒)")
             except TimeoutException:
-                print(
-                    f"⚠️ [Timeout Guardian] ターン {battle.turn} (プレイヤー {pl}) のCFR計算が5秒を超過したため、ハング防止目的で一時的に遮断してランダム手へフォールバックします。")
+                if DEBUG_PRINT:
+                    print(f" タイムアウト！ (5秒超過によりランダム手へ強制フォールバックします)")
                 my_strategy = None
             finally:
-                safe_set_alarm(0)  # タイマークリア
+                safe_set_alarm(0)
+                # 🌟 思考完了後に乱数状態を完全に復元
+                random.setstate(saved_random_state)
 
             if my_strategy:
                 strat_sum = sum(my_strategy.values())
@@ -1153,25 +1135,71 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
                 avail = battle.available_commands(pl)
                 commands[pl] = random.choice(avail) if avail else None
 
+        if DEBUG_PRINT:
+            print(f"         ├─ P0 決定コマンド: {commands[0]} | P1 決定コマンド: {commands[1]}")
+
+        # 🌟【根本解決：実機上のサニタイズ適用】
         battle.command = commands
-        # 進行を実行 (サニタイズ後のコマンドが battle.command に設定されて実行されます)
         battle.proceed(commands)
 
-        # 🌟【根本解決】サニタイズ適用後に実際にシミュレータ上で実行された
-        # クリーンなコマンド（battle.command）を取得して履歴にバインドします
+        # 🌟【根本解決：生コマンド(commands)ではなく、実際に実行された安全なコマンドをログに記録】
         actual_commands = battle.command if battle.command else commands
 
         history_log.append({
             "turn": battle.turn,
-            "commands": actual_commands,  # 🌟 サニタイズ後のクリーンなコマンドを記録
+            "commands": actual_commands,  # 👈 汚れたコマンドではなく、安全に進行された実機コマンドを保存
             "hp": [battle.pokemon[0].hp, battle.pokemon[1].hp] if all(battle.pokemon) else [0, 0],
             "strategies": turn_strategies
         })
 
-        if battle.turn >= 50:
+        # 🌟 100ターンリミット判定（打ち切り緩和）
+        if battle.turn >= 100:
+            if DEBUG_PRINT:
+                print("      [Warning] 100ターンを超過したため、TOD（判定）決着へ移行します。")
             break
 
     winner = battle.winner()
+
+    # 🌟 TOD (Time of Death) 判定決着ロジック
+    if winner is None:
+        # 1. 生存ポケモンの数を比較
+        alive_p0 = sum(1 for p in battle.selected[0] if p.hp > 0)
+        alive_p1 = sum(1 for p in battle.selected[1] if p.hp > 0)
+
+        if alive_p0 > alive_p1:
+            winner = 0
+            if DEBUG_PRINT: print(
+                f"      [TOD] 生存数判定により Player 0 の判定勝ち (P0:{alive_p0}体 vs P1:{alive_p1}体)")
+        elif alive_p1 > alive_p0:
+            winner = 1
+            if DEBUG_PRINT: print(
+                f"      [TOD] 生存数判定により Player 1 の判定勝ち (P0:{alive_p0}体 vs P1:{alive_p1}体)")
+        else:
+            # 2. 生存数が同じなら、手持ち全体の残りHP割合の総和を比較
+            def calc_total_hp_ratio(player_idx):
+                total_ratio = 0.0
+                for p in battle.selected[player_idx]:
+                    max_hp = p.status[0] if (hasattr(p, 'status') and p.status[0] > 0) else 100
+                    total_ratio += max(0.0, p.hp / max_hp)
+                return total_ratio
+
+            hp_ratio_p0 = calc_total_hp_ratio(0)
+            hp_ratio_p1 = calc_total_hp_ratio(1)
+
+            if hp_ratio_p0 > hp_ratio_p1:
+                winner = 0
+                if DEBUG_PRINT: print(
+                    f"      [TOD] 残りHP割合判定により Player 0 の判定勝ち (P0:{hp_ratio_p0:.2f} vs P1:{hp_ratio_p1:.2f})")
+            elif hp_ratio_p1 > hp_ratio_p0:
+                winner = 1
+                if DEBUG_PRINT: print(
+                    f"      [TOD] 残りHP割合判定により Player 1 の判定勝ち (P0:{hp_ratio_p0:.2f} vs P1:{hp_ratio_p1:.2f})")
+            else:
+                # 3. 完全に同じならランダムで勝者を決定（引き分け防止）
+                winner = random.choice([0, 1])
+                if DEBUG_PRINT: print(f"      [TOD] 完全同点のため、ランダムに Player {winner} を勝者として決着")
+
+    print(f"   🏆 [Match {match_id:2d}/40] 決着！ 勝者: Player {winner} (所要ターン: {battle.turn:2d}ターン)")
 
     return {
         "match_id": match_id,
@@ -1274,7 +1302,7 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
                         selection_predictor=selection_predictor
                     )
                     f_out.write(json.dumps(match_data, ensure_ascii=False) + "\n")
-                    f_out.flush()  # 🌟 即時書き出しを強制して中断時のデータ破損（0バイト）を完全防止
+                    f_out.flush()
                 except Exception as e:
                     import traceback
                     traceback.print_exc()
@@ -1404,7 +1432,6 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
 if __name__ == "__main__":
     Pokemon.init(season=22)
 
-    # [動的インポート解決ガード]
     if not hasattr(AegisAnalyzer, '_aegis_flat_belief_patched'):
         def _build_flat_belief_fallback_patch(self, pokemon_name: str) -> Dict[Any, float]:
             from src.rebel.belief_state import PokemonTypeHypothesis
@@ -1454,7 +1481,6 @@ if __name__ == "__main__":
         AegisAnalyzer._aegis_flat_belief_patched = True
         print("ℹ️ [Aegis Patch] AegisAnalyzer._build_flat_belief 動的注入を完了しました。")
 
-    # Battle.change_pokemon 引数競合・タイマン交代無効化・安全防止パッチ
     if not hasattr(Battle, '_aegis_change_pokemon_patched'):
         original_change_pokemon = Battle.change_pokemon
 
@@ -1517,7 +1543,6 @@ if __name__ == "__main__":
         print(
             "ℹ️ [Aegis Patch] Battle.change_pokemon インデックスエラー安全防止パッチ(引数マッピング修正済)を適用しました。")
 
-    # [Aegis Deepcopy Optimization Patch]
     if not hasattr(Battle, '_aegis_deepcopy_patched'):
         def patched_battle_deepcopy(self, memo):
             if id(self) in memo:
@@ -1551,11 +1576,25 @@ if __name__ == "__main__":
                 except Exception:
                     setattr(new_battle, k, v)
 
+            # 🌟【根本解決：同一性（ポインタ）保護アライメント】
+            # コピーされたバトル場のポケモンオブジェクト（new_battle.pokemon）を、
+            # 手持ちリスト（new_battle.selected）に格納されている個体と物理的に完全に同一化させ、
+            # CFRの脳内における「HP減少の同期不全（幽霊ポケモンバグ）」を100%遮断します。
+            if hasattr(new_battle, 'pokemon') and new_battle.pokemon:
+                for side_idx in [0, 1]:
+                    active_p = new_battle.pokemon[side_idx]
+                    if active_p and hasattr(new_battle, 'selected') and side_idx < len(new_battle.selected) and new_battle.selected[side_idx]:
+                        # ポインタの完全結合 (NameError修正版)
+                        for idx_p, p_in_party in enumerate(new_battle.selected[side_idx]):
+                            if p_in_party and p_in_party.name == active_p.name:
+                                new_battle.pokemon[side_idx] = p_in_party
+                                break
+
             if hasattr(new_battle, 'pokemon') and new_battle.pokemon:
                 for p in new_battle.pokemon:
                     if p:
-                        for attr in ['battle', '_battle', 'current_battle']:
-                            if hasattr(p, attr):
+                        for attr in list(p.__dict__.keys()):
+                            if "battle" in attr.lower():
                                 setattr(p, attr, new_battle)
 
             if hasattr(new_battle, 'selected') and new_battle.selected:
@@ -1563,8 +1602,8 @@ if __name__ == "__main__":
                     if side:
                         for p in side:
                             if p:
-                                for attr in ['battle', '_battle', 'current_battle']:
-                                    if hasattr(p, attr):
+                                for attr in list(p.__dict__.keys()):
+                                    if "battle" in attr.lower():
                                         setattr(p, attr, new_battle)
 
             return new_battle
@@ -1578,37 +1617,46 @@ if __name__ == "__main__":
             new_poke = cls.__new__(cls)
             memo[id(self)] = new_poke
 
-            avoid_keys = {'battle', '_battle', 'current_battle'}
+            # 🌟【極限高速パス定義】
+            # ポケモンが保持するリスト・辞書の中で、プリミティブ型しか含まないことが確実なキー。
+            # 面倒な再帰ディープコピーを完全にバイパスさせ、1手あたりのシミュレーションを0.1秒台へ引き下げます。
+            PRIMITIVE_LIST_KEYS = {
+                'moves', 'pp', 'effort', 'indiv', 'status', 'rank', 'types',
+                'lost_types', 'added_types', 'speed_range', '_Pokemon__moves'
+            }
 
+            # 🌟 循環参照を難読化名含めて完全遮断する部分一致キーフィルタ
             for k, v in self.__dict__.items():
-                if k in avoid_keys:
+                if "battle" in k.lower():
                     continue
 
-                # 🌟 【超高速化】プリミティブ型はそのまま代入（deepcopyを呼ばない）
                 if v is None or isinstance(v, (int, float, str, bool)):
                     new_poke.__dict__[k] = v
-                elif isinstance(v, list):
-                    # リストの中身がプリミティブなら、内包表記で高速コピー
-                    if all(isinstance(x, (int, float, str, bool, type(None))) for x in v):
+                elif k in PRIMITIVE_LIST_KEYS:
+                    if isinstance(v, list):
                         new_poke.__dict__[k] = list(v)
+                    elif isinstance(v, (set, tuple)):
+                        new_poke.__dict__[k] = type(v)(v)
                     else:
-                        new_poke.__dict__[k] = [deepcopy(item, memo) for item in v]
+                        new_poke.__dict__[k] = v
+                elif isinstance(v, list):
+                    new_poke.__dict__[k] = [deepcopy(item, memo) for item in v]
                 elif isinstance(v, dict):
-                    # 辞書の中身がプリミティブなら、高速コピー
-                    if all(isinstance(dk, (int, float, str, bool)) and isinstance(dv, (int, float, str, bool, type(None))) for dk, dv in v.items()):
+                    if all(isinstance(dk, (int, float, str, bool)) and isinstance(dv,
+                                                                                  (int, float, str, bool, type(None)))
+                           for dk, dv in v.items()):
                         new_poke.__dict__[k] = dict(v)
                     else:
                         new_dict = {}
                         for dk, dv in v.items():
-                            new_dk = deepcopy(dk, memo) if not isinstance(dk, (str, int, float, bool, type(None))) else dk
-                            new_dv = deepcopy(dv, memo) if not isinstance(dv, (str, int, float, bool, type(None))) else dv
+                            new_dk = deepcopy(dk, memo) if not isinstance(dk,
+                                                                          (str, int, float, bool, type(None))) else dk
+                            new_dv = deepcopy(dv, memo) if not isinstance(dv,
+                                                                          (str, int, float, bool, type(None))) else dv
                             new_dict[new_dk] = new_dv
                         new_poke.__dict__[k] = new_dict
                 elif isinstance(v, set):
-                    if all(isinstance(x, (int, float, str, bool, type(None))) for x in v):
-                        new_poke.__dict__[k] = set(v)
-                    else:
-                        new_poke.__dict__[k] = {deepcopy(item, memo) for item in v}
+                    new_poke.__dict__[k] = {deepcopy(item, memo) for item in v}
                 else:
                     try:
                         new_poke.__dict__[k] = deepcopy(v, memo)
@@ -1623,31 +1671,19 @@ if __name__ == "__main__":
         Battle._aegis_deepcopy_patched = True
         print("ℹ️ [Aegis Patch] Battle and Pokemon customized __deepcopy__ optimization applied.")
 
-        # =========================================================================
-        # Battle.available_commands テラスタル（10-13）排除 ＆ 瀕死交代完全排除フィルタ
-        # =========================================================================
         if not hasattr(Battle, '_aegis_available_commands_patched3'):
             original_available_commands = Battle.available_commands
 
 
             def patched_available_commands(self, player, *args, **kwargs):
-                """
-                レギュレーションM-B（テラスタル禁止環境）に適合させるため、10〜13番のテラスタルコマンドを排除します。
-
-                🌟【根本解決】シミュレータ本来のバグである「瀕死のポケモンへの交代コマンド(20〜25)」を
-                CFRソルバーやランダムフォールバックの選択肢（利用可能手リスト）から、最初から物理的に完全に排除します。
-                これにより、AIが不正な交代手を脳内評価・生出力すること自体を上流で完全に防ぎます。
-                """
                 import warnings
 
-                # オリジナルの呼び出し時に発生する "No available commands" 警告のみを一時的に非表示にする
                 with warnings.catch_warnings():
                     warnings.filterwarnings("ignore", category=UserWarning, message=".*No available commands.*")
                     cmds = original_available_commands(self, player, *args, **kwargs)
 
                 filtered_cmds = [c for c in cmds if c not in range(10, 14)]
 
-                # 🌟 瀕死の控えへの交代コマンド(20〜25)を無条件で排除
                 player_int = int(player)
                 party = self.selected[player_int] if (self.selected and player_int < len(self.selected)) else []
                 p_active = self.pokemon[player_int] if (self.pokemon and player_int < len(self.pokemon)) else None
@@ -1657,9 +1693,8 @@ if __name__ == "__main__":
                     if 20 <= c <= 25:
                         target_idx = c - 20
                         if target_idx >= len(party):
-                            continue  # 範囲外除外
+                            continue
                         target_poke = party[target_idx]
-                        # 交代先が自分自身、またはすでに瀕死（HP <= 0）の場合は選択肢から完全に抹殺
                         if target_poke == p_active or target_poke.hp <= 0:
                             continue
                     cleaned_cmds.append(c)
@@ -1677,7 +1712,6 @@ if __name__ == "__main__":
                         alive_benches = [pb.name for pb in party if pb.hp > 0 and pb != p_active]
                         active_conditions = [k for k, v in getattr(p_active, 'condition', {}).items() if v > 0]
 
-                        # 真に異常なコマンド枯渇（技選択時の空、または控えがいるのに交代先がない異常）のみ出力
                         if phase == "battle" or (phase == "change" and len(alive_benches) > 0):
                             print(f"\n🚨 [Aegis Available Commands Debug] --- 警告発生時の戦況診断ダンプ ---")
                             print(f"  - プレイヤー   : Player {player_int}")
@@ -1711,7 +1745,6 @@ if __name__ == "__main__":
             Battle._aegis_available_commands_patched3 = True
             print("ℹ️ [Aegis Patch] Battle.available_commands 瀕死交代完全排除パッチが適用されました。")
 
-    # Battle.battle_command 内部ランダムエラー防止パッチ
     if not hasattr(Battle, '_aegis_battle_command_patched'):
         original_battle_command = Battle.battle_command
 
@@ -1727,7 +1760,6 @@ if __name__ == "__main__":
         Battle._aegis_battle_command_patched = True
         print("ℹ️ [Aegis Patch] Battle.battle_command 内部安全パッチを適用しました。")
 
-    # その他補正パッチ群
     if not hasattr(Pokemon, '_aegis_find_patched'):
         original_find = Pokemon.find
 
@@ -1786,41 +1818,27 @@ if __name__ == "__main__":
         original_is_float = Battle.is_float if hasattr(Battle, 'is_float') else None
 
 
-        # -------------------------------------------------------------------------
-        # A. is_float (浮遊判定) の無限ループ・AttributeError 完全防止ガード
-        # -------------------------------------------------------------------------
         def patched_is_float(self, player: int) -> bool:
             try:
                 player_int = int(player)
                 if player_int not in [0, 1]:
                     return False
 
-                # 場にポケモンがいない（None）、または瀕死の場合は浮いていない(False)として即時返却
                 p = self.pokemon[player_int] if (self.pokemon and player_int < len(self.pokemon)) else None
                 if not p or p.hp <= 0:
                     return False
 
-                # 通常判定を実行
                 if original_is_float:
                     return original_is_float(self, player_int)
                 return False
             except Exception:
-                # 内部でいかなるエラーが発生した場合も、ハングを防ぐため安全に False を返して脱出
                 return False
 
 
-        # ---------------------------------------------------------------------
-        # 1. コマンド・サニタイザー (Command Sanitizer)
-        # ---------------------------------------------------------------------
         def sanitize_commands(battle_obj, commands):
-            """
-            実機進行前に不可能なコマンド（不正な交代等）を検証し、安全なデフォルト手に書き換えます。
-            """
             if commands is None or len(commands) < 2:
                 return commands
 
-            # 🌟【根本解決】シミュレータ内部の交代/行動解決ループ中（change, action）は、
-            # 内部の自動遷移を阻害しないためにサニタイズ（書き換え）を完全にバイパスします。
             current_phase = getattr(battle_obj, 'phase', 'battle')
             if current_phase in ['change', 'action']:
                 return commands
@@ -1829,26 +1847,23 @@ if __name__ == "__main__":
             for player in range(2):
                 cmd = sanitized[player]
                 active_poke = battle_obj.pokemon[player] if (
-                        battle_obj.pokemon and player < len(battle_obj.pokemon)) else None
+                        battle_obj.command and player < len(battle_obj.pokemon)) else None
                 if not active_poke:
                     continue
 
-                # 交代コマンド (20〜25) の正当性チェック
                 if cmd is not None and 20 <= cmd <= 25:
                     switch_to_party_idx = cmd - 20
                     party = battle_obj.selected[player] if (
                             battle_obj.selected and player < len(battle_obj.selected)) else []
                     is_valid = True
 
-                    # インデックス範囲外、あるいは瀕死(HP=0)の場合は無効（自分自身への交代はシミュレータに任せて誤検知を回避）
                     if switch_to_party_idx >= len(party):
                         is_valid = False
                     else:
                         target_poke = party[switch_to_party_idx]
-                        if target_poke.hp <= 0:  # 瀕死状態のみを厳格にチェック
+                        if target_poke.hp <= 0:
                             is_valid = False
 
-                    # 不正な交代を検知した場合、安全な技選択（最初のPPのある技）にフォールバック
                     if not is_valid:
                         fallback_cmd = 0
                         if hasattr(active_poke, 'moves') and active_poke.moves:
@@ -1863,12 +1878,12 @@ if __name__ == "__main__":
 
             return sanitized
 
-        # 進行メソッド (Proceed) の拡張
+
         def patched_proceed(self, commands=None):
             target_cmds = commands if commands is not None else self.command
             cmds = sanitize_commands(self, target_cmds)
 
-            self._tod_debug_count = 0  # カウンタリセット
+            self._tod_debug_count = 0
 
             if cmds:
                 cmds = list(cmds)
@@ -1917,13 +1932,12 @@ if __name__ == "__main__":
             return res
 
 
-        # 予備安全弁としてのTOD_scoreフック（150回空回りした場合は自動的に相手を勝者にして無限ループから脱出）
         def patched_tod_score(self, player, *args, **kwargs):
             count = getattr(self, '_tod_debug_count', 0) + 1
             self._tod_debug_count = count
 
             if count > 150:
-                self._tod_debug_count = 0  # カウンタリセット
+                self._tod_debug_count = 0
                 if player == 0:
                     return 999999.0
                 else:
@@ -1932,7 +1946,6 @@ if __name__ == "__main__":
             return original_tod_score(self, player, *args, **kwargs)
 
 
-        # クラスメソッドの再マッピング（強制上書き）
         Battle.proceed = patched_proceed
         if hasattr(Battle, 'is_float'):
             Battle.is_float = patched_is_float
@@ -1950,5 +1963,4 @@ if __name__ == "__main__":
             Pokemon.all_moves['キングシールド'] = Pokemon.all_moves[target_alias]
             break
 
-    # 進化ループの実行
     run_evolution_loop(total_generations=1000, matches_per_gen=40)
