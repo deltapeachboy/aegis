@@ -17,6 +17,7 @@ import urllib.request  # SDK不要でGemini APIと直接通信
 # =========================================================================
 # 0. 外部高度推論ライブラリの安全ロード（Safe Fallback）
 # =========================================================================
+
 try:
     import torch
     import torch.nn as nn
@@ -43,10 +44,6 @@ _original_open = builtins.open
 
 
 def patched_open(file, *args, **kwargs):
-    mode = args[0] if len(args) > 0 else kwargs.get("mode", "r")
-    if "r" in mode and "encoding" not in kwargs:
-        kwargs["encoding"] = "utf-8"
-
     if isinstance(file, str) and "learnset.json" in file:
         base_dir = os.path.dirname(os.path.abspath(__file__))
         custom_path = os.path.join(base_dir, "battle_data", "mb_learnset.json")
@@ -69,10 +66,8 @@ def patched_open(file, *args, **kwargs):
 builtins.open = patched_open
 
 # =========================================================================
-# 2. 【Aegis Namespace Bridge (二重上書き・リセット防止ガード版)】
+# 1. 【Aegis Namespace Bridge (二重上書き・リセット防止ガード版)】
 # =========================================================================
-# 🌟【根本解決】aegis_bot.py 単体起動時にも、sys.modules の再初期化による
-# パッチ上書き（リセット）破壊バグが発生するのを完全に防止します。
 if 'src.pokemon_battle_sim' not in sys.modules:
     sys.modules['src.pokemon_battle_sim'] = types.ModuleType('src.pokemon_battle_sim')
 if 'src.pokemon_battle_sim.pokemon' not in sys.modules:
@@ -94,8 +89,10 @@ sys.modules['src.pokemon_battle_sim'].__dict__.update(pokemon_module.__dict__)
 sys.modules['src.pokemon_battle_sim.pokemon'].__dict__.update(pokemon_module.__dict__)
 sys.modules['src.pokemon_battle_sim.battle'].__dict__.update(battle_module.__dict__)
 sys.modules['src.pokemon_battle_sim.damage'].__dict__.update(pokemon_module.__dict__)
-# =========================================================================
 
+# =========================================================================
+# 2. 共通ライブラリ・モジュールのロード
+# =========================================================================
 from pokepy.pokemon import Pokemon
 from pokepy.battle import Battle
 from pokepy.pokebot import Pokebot
@@ -170,13 +167,13 @@ def shaped_value_network_forward(self, states, *args, **kwargs):
                     if opp_active and any(t in ['いわ', 'じめん', 'はがね'] for t in opp_active.types):
                         shaped_prob -= 0.02
 
-                # E. ミミッキュの「ばけのかわ（インチキ保証）」の価値前借り (勝率 ±0.05 補正)
+                # E. ミミッキュの「ばけのかわ」の価値前借り (勝率 ±0.05 補正)
                 if my_active and my_active.name == "ミミッキュ":
                     shaped_prob += 0.05
                 if opp_active and opp_active.name == "ミミッキュ":
                     shaped_prob -= 0.05
 
-                # F. イダイトウの「おはかまいり（逆転火力）」の価値前借り
+                # F. イダイトウの「おはかまいり」の価値前借り
                 if my_active and "イダイトウ" in my_active.name:
                     dead_count = sum(1 for p in current_battle.selected[my_side] if p.hp <= 0)
                     shaped_prob += dead_count * 0.03
@@ -200,9 +197,6 @@ ReBeLValueNetwork.forward = shaped_value_network_forward
 Battle.can_terastal = lambda self, player: False
 
 
-# =========================================================================
-# 🌟 グローバルヘルパー関数（メガストーン解決の共通化）
-# =========================================================================
 def get_possible_mega_stones(p_name: str) -> List[str]:
     """ポケモンの日本語名から、データベース上に実在する正しいメガストーン候補のリストを返す"""
     base = p_name.split("(")[0]
@@ -230,13 +224,11 @@ def get_possible_mega_stones(p_name: str) -> List[str]:
 
 
 # =========================================================================
-# 3. 【高度化】AegisTeamBuilder (持ち物＆努力値動的重み付き学習 Ver 16.6)
+# 3. 【高度化】AegisTeamBuilder (持ち物＆努力値カテゴリ動的学習適合版)
 # =========================================================================
 class AegisTeamBuilder:
     """
-    Project Aegis 構築自動生成システム (Layer 16.6)
-    能力ポイント制に基づく上限付きランダム配分、および性格・特性、半減実フィルターを完全統合。
-    さらに実戦勝率（meta_weights.json）から、持ち物および努力値テンプレートを動的に重み付けロードします。
+    Project Aegis 構築自動生成システム (Version 16.61 - 実機連動モデル)
     """
 
     MEGA_PROBABILITIES = {
@@ -452,7 +444,7 @@ class AegisTeamBuilder:
         return points
 
     def build_team(self, core_name: str, pokemon_weights: Optional[dict] = None) -> Dict[str, Any]:
-        """軸(コア)に基づき、努力値カテゴリと持ち物の動的重み付きロードに対応したチーム構築を生成"""
+        """[Aegis Build Ver 16.61 - 持ち物＆努力値動的重み適合版]"""
         if core_name == "ギルガルド" and "ギルガルド" not in Pokemon.zukan:
             for k in ['ギルガルド(シールド)', 'ギルガルド（シールド）']:
                 if k in Pokemon.zukan:
@@ -564,13 +556,15 @@ class AegisTeamBuilder:
             zukan_entry = Pokemon.zukan[name]
             dyn_data = pokemon_weights.get(name, {}) if pokemon_weights else {}
 
-            # 🚀 [A. 努力値配分カテゴリ(極振り, 調整, 両刀)の学習重みの読み込み]
             base_stats = zukan_entry.get("base", [100, 100, 100, 100, 100, 100])
+
             stat_points = [0] * 6
             ev_category = "max_out"
             adj_nature_weights = {}
 
-            # 🌟 初期は旧仕様(max_out=50%, hybrid=46%, mixed=4%)に完全準拠、学習が進むと重み付けされます
+            rand_ev = random.random()
+
+            # 🌟 努力値配分カテゴリ(極振り, 調整, 両刀)の学習重みの読み込み
             ev_weights_db = dyn_data.get("ev_categories", {})
             ev_categories_list = ["max_out", "hybrid", "mixed"]
             ev_choice_weights = [
@@ -583,7 +577,7 @@ class AegisTeamBuilder:
 
             ev_category = random.choices(ev_categories_list, weights=ev_choice_weights, k=1)[0]
 
-            # 🚀 [B. 技構成の先行サンプリング]
+            # 🚀 [ステップ1: 技構成の選定を最優先で行う]
             learnable = self.learnsets.get(name, ["テラバースト"])
             move_weights = [dyn_data.get("moves", {}).get(m, 1.0) for m in learnable]
 
@@ -609,7 +603,7 @@ class AegisTeamBuilder:
                 while len(chosen_moves) < 4:
                     chosen_moves.append("わるあがき")
 
-            # 🚀 [C. 確定技に基づく性格・特性抽選]
+            # 🚀 [ステップ2: 確定した技から物理・特殊判定]
             has_physical_attack = False
             has_special_attack = False
             for mv in chosen_moves:
@@ -635,7 +629,7 @@ class AegisTeamBuilder:
                     has_physical_attack = True
                     has_special_attack = True
 
-            # 努力値配分の割り当て
+            # 努力値配分
             if ev_category == "mixed":
                 if random.random() < 0.5:
                     stat_points = self.allocate_stat_points_randomly([1, 3, 5], total_points=66, max_single=32)
@@ -645,7 +639,6 @@ class AegisTeamBuilder:
                     stat_points = self.allocate_stat_points_randomly([0, 1, 3], total_points=66, max_single=32)
                     adj_nature_weights["ゆうかん"] = 7.5
                     adj_nature_weights["れいせい"] = 7.5
-
             elif ev_category == "hybrid":
                 hybrid_patterns = [
                     ("HBD", [0, 2, 4]),
@@ -662,16 +655,7 @@ class AegisTeamBuilder:
                     ("HDS", [0, 4, 5]),
                 ]
 
-                valid_patterns = []
-                for name_pat, idx_list in hybrid_patterns:
-                    if "A" in name_pat and has_special_attack and not has_physical_attack: continue
-                    if "C" in name_pat and has_physical_attack and not has_special_attack: continue
-                    valid_patterns.append((name_pat, idx_list))
-
-                if not valid_patterns:
-                    valid_patterns = hybrid_patterns
-
-                chosen_pattern_name, target_indices = random.choice(valid_patterns)
+                chosen_pattern_name, target_indices = random.choice(hybrid_patterns)
                 stat_points = self.allocate_stat_points_randomly(target_indices, total_points=66, max_single=32)
 
                 if "S" in chosen_pattern_name:
@@ -682,15 +666,8 @@ class AegisTeamBuilder:
                     adj_nature_weights["わんぱく"] = 4.0
                     adj_nature_weights["しんちょう"] = 4.0
                     adj_nature_weights["おだやか"] = 4.0
-
             else:
-                max_out_candidates = ["HB", "HD", "HS"]
-                if has_physical_attack or not has_special_attack:
-                    max_out_candidates += ["HA", "AS"]
-                if has_special_attack or not has_physical_attack:
-                    max_out_candidates += ["HC", "CS"]
-
-                chosen_max_type = random.choice(max_out_candidates)
+                chosen_max_type = random.choice(["HA", "HB", "HC", "HD", "HS", "AS", "CS"])
 
                 if chosen_max_type == "HA":
                     stat_points[0], stat_points[1], stat_points[5] = 32, 32, 2
@@ -704,9 +681,6 @@ class AegisTeamBuilder:
                 elif chosen_max_type == "HD":
                     stat_points[0], stat_points[4], stat_points[2] = 32, 32, 2
                     adj_nature_weights["しんちょう"] = 4.0
-                elif chosen_max_type == "おだやか":
-                    stat_points[0], stat_points[4], stat_points[2] = 32, 32, 2
-                    adj_nature_weights["おだやか"] = 4.0
                 elif chosen_max_type == "HS":
                     stat_points[0], stat_points[5], stat_points[4] = 32, 32, 2
                     adj_nature_weights["ようき"] = 4.0
@@ -720,19 +694,7 @@ class AegisTeamBuilder:
                     adj_nature_weights["おくびょう"] = 4.0
                     adj_nature_weights["ひかえめ"] = 2.5
 
-            # 性格の最終決定
-            adj_ability_weights = {}
-            if "オーロラベール" in chosen_moves or "ふぶき" in chosen_moves:
-                if "ゆきふらし" in zukan_entry.get("ability", []):
-                    adj_ability_weights["ゆきふらし"] = 5.0
-                elif "ゆきがくれ" in zukan_entry.get("ability", []):
-                    adj_ability_weights["ゆきがくれ"] = 2.0
-                assigned_items[name] = "ひかりのねんど"
-
-            if "ステルスロック" in chosen_moves or "あくび" in chosen_moves:
-                if "すなおこし" in zukan_entry.get("ability", []):
-                    adj_ability_weights["すなおこし"] = 5.0
-
+            # 性格
             natures = list(self.NATURE_WEIGHTS.keys())
             nature_weights = [
                 self.NATURE_WEIGHTS[nat] * dyn_data.get("natures", {}).get(nat, 1.0) * adj_nature_weights.get(nat, 1.0)
@@ -740,7 +702,11 @@ class AegisTeamBuilder:
             ]
             nature = random.choices(natures, weights=nature_weights, k=1)[0]
 
+            # 特性
             abilities = zukan_entry.get("ability", ["とくせいなし"])
+
+            # 🌟【不整合解決】特性補正用の辞書を安全に初期化
+            adj_ability_weights = {}
 
             if name == "メタモン" and "かわりもの" in abilities:
                 if random.random() < 0.8:
@@ -760,7 +726,7 @@ class AegisTeamBuilder:
             else:
                 ability = "とくせいなし"
 
-            # 持ち物サンプリング
+            # 持ち物
             assigned_item = ""
             mega_candidates = get_possible_mega_stones(name)
             valid_mega_stones = [stone for stone in mega_candidates if stone in self.mb_items]
@@ -807,19 +773,20 @@ class AegisTeamBuilder:
                                     if def_type in Pokemon.type_id:
                                         def_id = Pokemon.type_id[def_type]
                                         eff *= Pokemon.type_corrections[atk_id][def_id]
+                                # 全体のタイプ相性の掛け算が完了したループ外側で抜群判定を行う
                                 if eff > 1.0:
                                     is_weak = True
                             if not is_weak:
                                 weight = 0.0
 
-                        # 🌟【学習した持ち物の重み「dynamic_w」を乗算】
+                        # 🌟【学習フィードバック補正の乗算】
                         dynamic_w = dyn_data.get("items", {}).get(itm, 1.0)
                         item_weights.append(weight * dynamic_w)
 
                     if sum(item_weights) <= 0:
                         item_weights = [1.0] * len(available_items)
 
-                    # 🛡️【安全対策ガード】自分に不適合な他種族専用 of メガストーンを排除
+                    # 🛡️ 不適合メガストーン排除
                     my_mega_stone = name.split("(")[0] + "ナイト"
                     filtered_available_items = []
                     filtered_item_weights = []
@@ -901,12 +868,11 @@ class AegisTeamSelector:
                     warnings.warn("selection_bert/model.py 内に有効な PyTorch モデルクラスが見つかりません。")
 
             except Exception as e:
-                warnings.warn(f"SelectionBERTの動的ロードに失敗しました(相性総当たり評価にフォールバックします): {e}")
+                warnings.warn(f"SelectionBERTの動的ロードに失敗しました: {e}")
 
     def evaluate_matchup(self, my_poke: Pokemon, opp_poke: Pokemon) -> float:
         """
         お互いのポケモンが実際に採用している『4つの技』に基づいて相性を評価します。
-        全習得技の走査を廃止することで、計算量を350分の1以下に削減し、選出フェーズのフリーズを完全に解消します。
         """
         score = 0.0
 
@@ -1166,7 +1132,6 @@ def run_aegis_bot():
     print("ℹ️ Aegis Live Bot Thread started.")
     analyzer = AegisAnalyzer()
 
-    # 画面キャプチャ及びイベントループエミュレーション
     while True:
         try:
             analyzer.capture()
@@ -1290,11 +1255,22 @@ if __name__ == "__main__":
                 except Exception:
                     setattr(new_battle, k, v)
 
+            # ポインタの完全結合 (NameError修正版)
+            if hasattr(new_battle, 'pokemon') and new_battle.pokemon:
+                for side_idx in [0, 1]:
+                    active_p = new_battle.pokemon[side_idx]
+                    if active_p and hasattr(new_battle, 'selected') and side_idx < len(new_battle.selected) and \
+                            new_battle.selected[side_idx]:
+                        for idx_p, p_in_party in enumerate(new_battle.selected[side_idx]):
+                            if p_in_party and p_in_party.name == active_p.name:
+                                new_battle.pokemon[side_idx] = p_in_party
+                                break
+
             if hasattr(new_battle, 'pokemon') and new_battle.pokemon:
                 for p in new_battle.pokemon:
                     if p:
-                        for attr in ['battle', '_battle', 'current_battle']:
-                            if hasattr(p, attr):
+                        for attr in list(p.__dict__.keys()):
+                            if "battle" in attr.lower():
                                 setattr(p, attr, new_battle)
 
             if hasattr(new_battle, 'selected') and new_battle.selected:
@@ -1302,8 +1278,8 @@ if __name__ == "__main__":
                     if side:
                         for p in side:
                             if p:
-                                for attr in ['battle', '_battle', 'current_battle']:
-                                    if hasattr(p, attr):
+                                for attr in list(p.__dict__.keys()):
+                                    if "battle" in attr.lower():
                                         setattr(p, attr, new_battle)
 
             return new_battle
@@ -1317,30 +1293,42 @@ if __name__ == "__main__":
             new_poke = cls.__new__(cls)
             memo[id(self)] = new_poke
 
-            # 🌟 すべてのバトルオブジェクトへの参照、および循環参照を難読化名含めて完全遮断
+            PRIMITIVE_LIST_KEYS = {
+                'moves', 'pp', 'effort', 'indiv', 'status', 'rank', 'types',
+                'lost_types', 'added_types', 'speed_range', '_Pokemon__moves'
+            }
+
             for k, v in self.__dict__.items():
                 if "battle" in k.lower():
                     continue
 
-                if isinstance(v, (str, int, float, bool, type(None))):
+                if v is None or isinstance(v, (int, float, str, bool)):
                     new_poke.__dict__[k] = v
+                elif k in PRIMITIVE_LIST_KEYS:
+                    if isinstance(v, list):
+                        new_poke.__dict__[k] = list(v)
+                    elif isinstance(v, (set, tuple)):
+                        new_poke.__dict__[k] = type(v)(v)
+                    else:
+                        new_poke.__dict__[k] = v
                 elif isinstance(v, list):
-                    new_poke.__dict__[k] = [
-                        deepcopy(item, memo) if not isinstance(item, (str, int, float, bool, type(None))) else item
-                        for item in v
-                    ]
+                    new_poke.__dict__[k] = [deepcopy(item, memo) for item in v]
                 elif isinstance(v, dict):
-                    new_dict = {}
-                    for dk, dv in v.items():
-                        new_dk = deepcopy(dk, memo) if not isinstance(dk, (str, int, float, bool, type(None))) else dk
-                        new_dv = deepcopy(dv, memo) if not isinstance(dv, (str, int, float, bool, type(None))) else dv
-                        new_dict[new_dk] = new_dv
-                    new_poke.__dict__[k] = new_dict
+                    if all(isinstance(dk, (int, float, str, bool)) and isinstance(dv,
+                                                                                  (int, float, str, bool, type(None)))
+                           for dk, dv in v.items()):
+                        new_poke.__dict__[k] = dict(v)
+                    else:
+                        new_dict = {}
+                        for dk, dv in v.items():
+                            new_dk = deepcopy(dk, memo) if not isinstance(dk,
+                                                                          (str, int, float, bool, type(None))) else dk
+                            new_dv = deepcopy(dv, memo) if not isinstance(dv,
+                                                                          (str, int, float, bool, type(None))) else dv
+                            new_dict[new_dk] = new_dv
+                        new_poke.__dict__[k] = new_dict
                 elif isinstance(v, set):
-                    new_poke.__dict__[k] = {
-                        deepcopy(item, memo) if not isinstance(item, (str, int, float, bool, type(None))) else item
-                        for item in v
-                    }
+                    new_poke.__dict__[k] = {deepcopy(item, memo) for item in v}
                 else:
                     try:
                         new_poke.__dict__[k] = deepcopy(v, memo)
@@ -1355,41 +1343,67 @@ if __name__ == "__main__":
         Battle._aegis_deepcopy_patched = True
         print("ℹ️ [Aegis Patch] Battle and Pokemon customized __deepcopy__ optimization applied.")
 
-    # =========================================================================
-    # 🌟 Battle.available_commands テラスタル（10-13）排除 ＆ コマンド空対策パッチ
-    # =========================================================================
-    if not hasattr(Battle, '_aegis_available_commands_patched2'):
-        original_available_commands = Battle.available_commands
+        if not hasattr(Battle, '_aegis_available_commands_patched3'):
+            original_available_commands = Battle.available_commands
 
 
-        def patched_available_commands(self, player, *args, **kwargs):
-            """
-            レギュレーションM-B（テラスタル禁止環境）に完全適合させるため、
-            元のシグネチャを完全に維持したまま、10〜13番のテラスタルコマンドを排除します。
-            """
-            cmds = original_available_commands(self, player, *args, **kwargs)
-            filtered_cmds = [c for c in cmds if c not in range(10, 14)]
+            def patched_available_commands(self, player, *args, **kwargs):
+                import warnings
 
-            if not filtered_cmds:
-                p = self.pokemon[player] if (self.pokemon and player < len(self.pokemon)) else None
-                if p and p.hp > 0:
-                    print(f"\n🚨 [Aegis Debug] コマンド選択肢が空になりました! (Player {player})")
-                    print(f"  - ポケモン: {p.name} (HP: {p.hp}/{p.status[0]})")
-                    print(f"  - 技スロット: {getattr(p, 'moves', 'N/A')}")
-                    print(f"  - 残りPP: {getattr(p, 'pp', 'N/A')}")
-                    print(f"  - 状態変化（アンコールなど）: {getattr(p, 'condition', {})}")
-                    print(f"  - 状態異常: {getattr(p, 'ailment', 'None')}")
-                    print(f"  - 持ち物: {p.item}")
-                    print(f"  - 固定技（こだわり等）: {getattr(p, 'fixed_move', 'None')}")
-                    print(f"  - ターン数: {self.turn}")
-                    print(f"  - 控え情報: {[p_bench.name for p_bench in self.selected[player] if p_bench.hp > 0]}")
-                    print("-" * 50 + "\n")
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", category=UserWarning, message=".*No available commands.*")
+                    cmds = original_available_commands(self, player, *args, **kwargs)
 
-                    # 救済ガード: 交代可能な生存控えを検索
-                    party = self.selected[player] if (self.selected and player < len(self.selected)) else []
+                filtered_cmds = [c for c in cmds if c not in range(10, 14)]
+
+                # 瀕死の控えへの交代コマンド(20〜25)を無条件で排除
+                player_int = int(player)
+                party = self.selected[player_int] if (self.selected and player_int < len(self.selected)) else []
+                p_active = self.pokemon[player_int] if (self.pokemon and player_int < len(self.pokemon)) else None
+
+                cleaned_cmds = []
+                for c in filtered_cmds:
+                    if 20 <= c <= 25:
+                        target_idx = c - 20
+                        if target_idx >= len(party):
+                            continue
+                        target_poke = party[target_idx]
+                        if target_poke == p_active or target_poke.hp <= 0:
+                            continue
+                    cleaned_cmds.append(c)
+
+                filtered_cmds = cleaned_cmds
+
+                if not filtered_cmds:
+                    if p_active and p_active.hp > 0:
+                        phase = "battle"
+                        if len(args) > 0:
+                            phase = args[0]
+                        elif "phase" in kwargs:
+                            phase = kwargs["phase"]
+
+                        alive_benches = [pb.name for pb in party if pb.hp > 0 and pb != p_active]
+                        active_conditions = [k for k, v in getattr(p_active, 'condition', {}).items() if v > 0]
+
+                    if phase == "battle" or (phase == "change" and len(alive_benches) > 0):
+                        print(f"\n🚨 [Aegis Available Commands Debug] --- 警告発生時の戦況診断ダンプ ---")
+                        print(f"  - プレイヤー   : Player {player_int}")
+                        print(f"  - フェーズ     : {phase}")
+                        print(f"  - ポケモン     : {p_active.name} (HP: {p_active.hp}/{p_active.status[0]})")
+                        print(f"  - 技スロット   : {getattr(p_active, 'moves', 'N/A')}")
+                        print(f"  - 各技残りPP   : {getattr(p_active, 'pp', 'N/A')}")
+                        print(
+                            f"  - 状態異常/眠り: {getattr(p_active, 'ailment', 'None')} (睡眠ターン数: {getattr(p_active, 'sleep_count', 0)})")
+                        print(f"  - 状態変化     : {active_conditions if active_conditions else 'なし'}")
+                        print(f"  - 持ち物       : {p_active.item if p_active.item else 'なし（または消費済み）'}")
+                        print(f"  - こだわり状態 : {getattr(p_active, 'fixed_move', 'なし')}")
+                        print(f"  - 控えの生存者 : {alive_benches if alive_benches else 'なし (タイマン状態)'}")
+                        print(f"  🚨 診断判定: 【要注意】行動選択フェーズ、または控えがいるのにコマンドが空です。")
+                        print("-" * 60 + "\n")
+
                     switch_cmds = []
                     for idx_temp, poke_bench in enumerate(party):
-                        if poke_bench.hp > 0 and poke_bench != p:
+                        if poke_bench.hp > 0 and poke_bench != p_active:
                             switch_cmds.append(20 + idx_temp)
 
                     if switch_cmds:
@@ -1397,24 +1411,18 @@ if __name__ == "__main__":
                     else:
                         filtered_cmds = [0]
 
-            return filtered_cmds
+                return filtered_cmds
 
 
-        Battle.available_commands = patched_available_commands
-        Battle._aegis_available_commands_patched2 = True
-        print("ℹ️ [Aegis Patch] Battle.available_commands テラスタル（10-13）排除 ＆ コマンド空対策パッチを適用しました。")
+            Battle.available_commands = patched_available_commands
+            Battle._aegis_available_commands_patched3 = True
+            print("ℹ️ [Aegis Patch] Battle.available_commands 瀕死交代完全排除パッチが適用されました。")
 
-    # =========================================================================
-    # 🌟 Battle.battle_command 内部ランダムエラー防止パッチ
-    # =========================================================================
     if not hasattr(Battle, '_aegis_battle_command_patched'):
         original_battle_command = Battle.battle_command
 
 
         def patched_battle_command(self, player, *args, **kwargs):
-            """
-            シミュレータ内部で解決コマンドが空になった際、random.choice が IndexError を起こすのを防止します。
-            """
             cmds = self.available_commands(player)
             if cmds:
                 return random.choice(cmds)
@@ -1425,9 +1433,6 @@ if __name__ == "__main__":
         Battle._aegis_battle_command_patched = True
         print("ℹ️ [Aegis Patch] Battle.battle_command 内部安全パッチを適用しました。")
 
-    # =========================================================================
-    # 🌟 その他補正パッチ群
-    # =========================================================================
     if not hasattr(Pokemon, '_aegis_find_patched'):
         original_find = Pokemon.find
 
@@ -1478,47 +1483,60 @@ if __name__ == "__main__":
         Battle._aegis_get_mega_name_patched = True
 
     # =========================================================================
-    # 🌟 【統合強化版】Battle.proceed & winner ＆ コマンド・サニタイザー & デッドロック防止パッチ
+    # 🌟 【根本解決】Battle.is_float & proceed & TOD_score 安全防壁統合パッチ
     # =========================================================================
-    if not hasattr(Battle, '_aegis_proceed_patched_v2'):
+    if not hasattr(Battle, '_aegis_tod_lock_guard_v4'):
         original_proceed = Battle.proceed
-        original_winner = Battle.winner
+        original_tod_score = Battle.TOD_score if hasattr(Battle, 'TOD_score') else Battle.tod_score
+        original_is_float = Battle.is_float if hasattr(Battle, 'is_float') else None
 
 
-        # ---------------------------------------------------------------------
-        # 1. コマンド・サニタイザー (Command Sanitizer)
-        # ---------------------------------------------------------------------
+        def patched_is_float(self, player: int) -> bool:
+            try:
+                player_int = int(player)
+                if player_int not in [0, 1]:
+                    return False
+
+                p = self.pokemon[player_int] if (self.pokemon and player_int < len(self.pokemon)) else None
+                if not p or p.hp <= 0:
+                    return False
+
+                if original_is_float:
+                    return original_is_float(self, player_int)
+                return False
+            except Exception:
+                return False
+
+
         def sanitize_commands(battle_obj, commands):
-            """
-            実機進行前に不可能なコマンド（不正な交代等）を検証し、安全なデフォルト手に書き換えます。
-            """
             if commands is None or len(commands) < 2:
+                return commands
+
+            current_phase = getattr(battle_obj, 'phase', 'battle')
+            if current_phase in ['change', 'action']:
                 return commands
 
             sanitized = list(commands)
             for player in range(2):
                 cmd = sanitized[player]
                 active_poke = battle_obj.pokemon[player] if (
-                        battle_obj.pokemon and player < len(battle_obj.pokemon)) else None
+                        battle_obj.command and player < len(battle_obj.pokemon)) else None
                 if not active_poke:
                     continue
 
-                # 交代コマンド (20〜25) の正当性チェック
                 if cmd is not None and 20 <= cmd <= 25:
                     switch_to_party_idx = cmd - 20
                     party = battle_obj.selected[player] if (
                             battle_obj.selected and player < len(battle_obj.selected)) else []
                     is_valid = True
 
-                    # インデックス範囲外、あるいは瀕死(HP=0)、あるいは現在のアクティブ自身への交代は無効
                     if switch_to_party_idx >= len(party):
                         is_valid = False
                     else:
                         target_poke = party[switch_to_party_idx]
-                        if target_poke == active_poke or target_poke.hp <= 0:
+                        if target_poke.hp <= 0:
                             is_valid = False
 
-                    # 不正な交代を検知した場合、安全な技選択（最初のPPのある技）にフォールバック
                     if not is_valid:
                         fallback_cmd = 0
                         if hasattr(active_poke, 'moves') and active_poke.moves:
@@ -1534,26 +1552,18 @@ if __name__ == "__main__":
             return sanitized
 
 
-        # ---------------------------------------------------------------------
-        # 2. 進行メソッド (Proceed) の拡張
-        # ---------------------------------------------------------------------
         def patched_proceed(self, commands=None):
-            # 2-A. コマンドのサニタイズ処理を適用
             target_cmds = commands if commands is not None else self.command
             cmds = sanitize_commands(self, target_cmds)
 
-            # 2-B. 1回のproceed呼び出しごとに、winner無限ループ検知用のカウンタをリセット
-            self._winner_call_count_in_proceed = 0
+            self._tod_debug_count = 0
 
-            # 2-C. 元々の proceed パッチロジック（技スロット補填＆メタモン制限ガード等）を完全に継承
             if cmds:
                 cmds = list(cmds)
                 for player in range(2):
                     p = self.pokemon[player]
                     if p and p.hp > 0:
                         temp_moves = list(p.moves) if hasattr(p, 'moves') and p.moves else []
-
-                        # メタモンの場合は技をへんしんのみに固定し、補填をスキップ
                         if p.name == "メタモン":
                             temp_moves = ["へんしん"]
                             is_modified = True
@@ -1562,7 +1572,6 @@ if __name__ == "__main__":
                             is_modified = True
                         else:
                             is_modified = False
-
                         if len(temp_moves) < 4 and p.name != "メタモン":
                             pokemon_name = p.name
                             learnable_moves = Pokemon.learnsets.get(pokemon_name, ["わるあがき"])
@@ -1575,7 +1584,6 @@ if __name__ == "__main__":
                             while len(temp_moves) < 4:
                                 temp_moves.append("わるあがき")
                                 is_modified = True
-
                         if is_modified:
                             try:
                                 p.moves = temp_moves
@@ -1593,60 +1601,40 @@ if __name__ == "__main__":
                                     cmds[player] = base_offset + fallback_idx
                 self.command = cmds
 
-            return original_proceed(self, commands=cmds)
+            res = original_proceed(self, commands=cmds)
+            return res
 
 
-        # ---------------------------------------------------------------------
-        # 3. 勝者判定メソッド (Winner) の拡張 (無限ループ検知安全弁)
-        # ---------------------------------------------------------------------
-        def patched_winner(self, record=True):
-            count = getattr(self, '_winner_call_count_in_proceed', 0) + 1
-            self._winner_call_count_in_proceed = count
+        def patched_tod_score(self, player, *args, **kwargs):
+            count = getattr(self, '_tod_debug_count', 0) + 1
+            self._tod_debug_count = count
 
             if count > 150:
-                print(f"\n⚠️ [Deadlock Guardian] 内部の膠着（無限ループ）を検知しました (同一ターン内判定回数: {count})。")
-                print(
-                    f"   - プレイヤー0: {self.pokemon[0].name if self.pokemon[0] else 'None'} (HP: {self.pokemon[0].hp if self.pokemon[0] else 0})")
-                print(
-                    f"   - プレイヤー1: {self.pokemon[1].name if self.pokemon[1] else 'None'} (HP: {self.pokemon[1].hp if self.pokemon[1] else 0})")
-                print("   - 暫定TOD判定に基づき、戦闘を安全に強制決着してループから離脱します。")
-
-                scores = []
-                for p in range(2):
-                    try:
-                        scores.append(self.TOD_score(p))
-                    except Exception:
-                        scores.append(0)
-
-                self._winner_call_count_in_proceed = 0  # カウンタリセット
-
-                # TODスコアの大きい側を勝者として返す
-                if scores[0] > scores[1]:
-                    return 0
+                self._tod_debug_count = 0
+                if player == 0:
+                    return 999999.0
                 else:
-                    return 1
+                    return 0.0
 
-            return original_winner(self, record=record)
+            return original_tod_score(self, player, *args, **kwargs)
 
 
-        # クラスメソッドの再バインド
         Battle.proceed = patched_proceed
-        Battle.winner = patched_winner
-        Battle._aegis_proceed_patched_v2 = True
-        print("ℹ️ [Aegis Patch] Battle.proceed & winner 統合サニタイズ・デッドロック防止パッチを正常に適用しました。")
+        if hasattr(Battle, 'is_float'):
+            Battle.is_float = patched_is_float
+        if hasattr(Battle, 'TOD_score'):
+            Battle.TOD_score = patched_tod_score
+        else:
+            Battle.tod_score = patched_tod_score
 
-    for target_alias in ['キングズシールド', 'キング・シールド']:
+        Battle._aegis_tod_lock_guard_v4 = True
+        print(
+            "ℹ️ [Project Aegis] インデント修復および Battle.is_float, proceed, TOD_score 統合安全防壁パッチの強制適用が完了しました。")
+
+    for target_alias in ['キングズシールド', 'キング・シールド', 'キングズ・シールド']:
         if target_alias in Pokemon.all_moves:
             Pokemon.all_moves['キングシールド'] = Pokemon.all_moves[target_alias]
             break
-
-    if hasattr(Pokemon, 'zukan'):
-        if 'ギルガルド' not in Pokemon.zukan:
-            for target_key in ['ギルガルド(シールド)', 'ギルガルド（シールド）']:
-                if target_key in Pokemon.zukan:
-                    Pokemon.zukan['ギルガルド'] = deepcopy(Pokemon.zukan[target_key])
-                    Pokemon.zukan['ギルガルド']['display_name'] = 'ギルガルド'
-                    break
 
     my_box = None
     analyzer = AegisAnalyzer(capture_box=my_box)
