@@ -43,6 +43,10 @@ _original_open = builtins.open
 
 
 def patched_open(file, *args, **kwargs):
+    mode = args[0] if len(args) > 0 else kwargs.get("mode", "r")
+    if "r" in mode and "encoding" not in kwargs:
+        kwargs["encoding"] = "utf-8"
+
     if isinstance(file, str) and "learnset.json" in file:
         base_dir = os.path.dirname(os.path.abspath(__file__))
         custom_path = os.path.join(base_dir, "battle_data", "mb_learnset.json")
@@ -65,16 +69,23 @@ def patched_open(file, *args, **kwargs):
 builtins.open = patched_open
 
 # =========================================================================
-# 2. 【Aegis Namespace Bridge】
+# 2. 【Aegis Namespace Bridge (二重上書き・リセット防止ガード版)】
 # =========================================================================
-sys.modules['src.pokemon_battle_sim'] = types.ModuleType('src.pokemon_battle_sim')
-sys.modules['src.pokemon_battle_sim.pokemon'] = types.ModuleType('src.pokemon_battle_sim.pokemon')
-sys.modules['src.pokemon_battle_sim.battle'] = types.ModuleType('src.pokemon_battle_sim.battle')
-sys.modules['src.pokemon_battle_sim.damage'] = types.ModuleType('src.pokemon_battle_sim.damage')
+# 🌟【根本解決】aegis_bot.py 単体起動時にも、sys.modules の再初期化による
+# パッチ上書き（リセット）破壊バグが発生するのを完全に防止します。
+if 'src.pokemon_battle_sim' not in sys.modules:
+    sys.modules['src.pokemon_battle_sim'] = types.ModuleType('src.pokemon_battle_sim')
+if 'src.pokemon_battle_sim.pokemon' not in sys.modules:
+    sys.modules['src.pokemon_battle_sim.pokemon'] = types.ModuleType('src.pokemon_battle_sim.pokemon')
+if 'src.pokemon_battle_sim.battle' not in sys.modules:
+    sys.modules['src.pokemon_battle_sim.battle'] = types.ModuleType('src.pokemon_battle_sim.battle')
+if 'src.pokemon_battle_sim.damage' not in sys.modules:
+    sys.modules['src.pokemon_battle_sim.damage'] = types.ModuleType('src.pokemon_battle_sim.damage')
 
 import pokepy.utils as utils_module
 
-sys.modules['src.pokemon_battle_sim.utils'] = utils_module
+if 'src.pokemon_battle_sim.utils' not in sys.modules:
+    sys.modules['src.pokemon_battle_sim.utils'] = utils_module
 
 import pokepy.pokemon as pokemon_module
 import pokepy.battle as battle_module
@@ -219,12 +230,13 @@ def get_possible_mega_stones(p_name: str) -> List[str]:
 
 
 # =========================================================================
-# 3. 【高度化】AegisTeamBuilder (能力ポイント＆メタモンサニタイズ完全移植版)
+# 3. 【高度化】AegisTeamBuilder (持ち物＆努力値動的重み付き学習 Ver 16.6)
 # =========================================================================
 class AegisTeamBuilder:
     """
-    Project Aegis 構築自動生成システム (Layer 15)
+    Project Aegis 構築自動生成システム (Layer 16.6)
     能力ポイント制に基づく上限付きランダム配分、および性格・特性、半減実フィルターを完全統合。
+    さらに実戦勝率（meta_weights.json）から、持ち物および努力値テンプレートを動的に重み付けロードします。
     """
 
     MEGA_PROBABILITIES = {
@@ -425,7 +437,6 @@ class AegisTeamBuilder:
         except Exception:
             return 0.0, 0.0
 
-    # 上限32付き能力ポイントランダム配分アルゴリズム
     def allocate_stat_points_randomly(self, indices: List[int], total_points: int = 66, max_single: int = 32) -> List[
         int]:
         points = [0] * 6
@@ -441,7 +452,7 @@ class AegisTeamBuilder:
         return points
 
     def build_team(self, core_name: str, pokemon_weights: Optional[dict] = None) -> Dict[str, Any]:
-        """軸(コア)に基づき、能力ポイント制と技選定の正常化に適合したチーム構築を生成"""
+        """軸(コア)に基づき、努力値カテゴリと持ち物の動的重み付きロードに対応したチーム構築を生成"""
         if core_name == "ギルガルド" and "ギルガルド" not in Pokemon.zukan:
             for k in ['ギルガルド(シールド)', 'ギルガルド（シールド）']:
                 if k in Pokemon.zukan:
@@ -523,7 +534,6 @@ class AegisTeamBuilder:
             "とけないこおり": "こおり", "まがったスプーン": "エスパー", "ようせいのハネ": "フェアリー"
         }
 
-        # 各半減実と対応するダメージタイプのマッピング
         TYPE_REDUCING_BERRIES = {
             "オッカのみ": "ほのお", "イトケのみ": "みず", "ソクノのみ": "でんき",
             "リンドのみ": "くさ", "ヤチェのみ": "こおり", "ヨプのみ": "かくとう",
@@ -554,85 +564,24 @@ class AegisTeamBuilder:
             zukan_entry = Pokemon.zukan[name]
             dyn_data = pokemon_weights.get(name, {}) if pokemon_weights else {}
 
-            # 🚀 [A. 能力ポイント決定 (極振り50% | 両刀4% | 複合46%)]
+            # 🚀 [A. 努力値配分カテゴリ(極振り, 調整, 両刀)の学習重みの読み込み]
             base_stats = zukan_entry.get("base", [100, 100, 100, 100, 100, 100])
-
             stat_points = [0] * 6
             ev_category = "max_out"
             adj_nature_weights = {}
 
-            rand_ev = random.random()
+            # 🌟 初期は旧仕様(max_out=50%, hybrid=46%, mixed=4%)に完全準拠、学習が進むと重み付けされます
+            ev_weights_db = dyn_data.get("ev_categories", {})
+            ev_categories_list = ["max_out", "hybrid", "mixed"]
+            ev_choice_weights = [
+                ev_weights_db.get("max_out", 1.0) * 0.50,
+                ev_weights_db.get("hybrid", 1.0) * 0.46,
+                ev_weights_db.get("mixed", 1.0) * 0.04
+            ]
+            if sum(ev_choice_weights) <= 0:
+                ev_choice_weights = [0.50, 0.46, 0.04]
 
-            if rand_ev < 0.04:
-                # 1. 両刀型 (4%)
-                ev_category = "mixed"
-                if random.random() < 0.5:
-                    stat_points = self.allocate_stat_points_randomly([1, 3, 5], total_points=66, max_single=32)
-                    adj_nature_weights["せっかち"] = 7.5
-                    adj_nature_weights["むじゃき"] = 7.5
-                else:
-                    stat_points = self.allocate_stat_points_randomly([0, 1, 3], total_points=66, max_single=32)
-                    adj_nature_weights["ゆうかん"] = 7.5
-                    adj_nature_weights["れいせい"] = 7.5
-            elif rand_ev < 0.50:
-                # 2. 複合調整型 (46%)
-                ev_category = "hybrid"
-                hybrid_patterns = [
-                    ("HBD", [0, 2, 4]),  # 総合耐久
-                    ("HBDS", [0, 2, 4, 5]),  # 耐久＋素早さ
-                    ("HABS", [0, 1, 2, 5]),  # 物理調整アタッカー
-                    ("HBCS", [0, 2, 3, 5]),  # 特殊調整アタッカー
-                    ("HAB", [0, 1, 2]),  # 物理中耐久
-                    ("HBC", [0, 2, 3]),  # 特殊中耐久
-                    ("HAD", [0, 1, 4]),  # 物理特防
-                    ("HCD", [0, 3, 4]),  # 特殊特防
-                    ("HAS", [0, 1, 5]),  # HP・S調整 (必須)
-                    ("HCS", [0, 3, 5]),  # HP・S調整 (必須)
-                    ("HBS", [0, 2, 5]),  # S微振り物理耐久 (必須)
-                    ("HDS", [0, 4, 5]),  # S微振り特殊耐久 (必須)
-                ]
-
-                # 特化スロットの決定
-                chosen_pattern_name, target_indices = random.choice(hybrid_patterns)
-                stat_points = self.allocate_stat_points_randomly(target_indices, total_points=66, max_single=32)
-
-                if "S" in chosen_pattern_name:
-                    adj_nature_weights["ようき"] = 4.0
-                    adj_nature_weights["おくびょう"] = 4.0
-                elif "B" in chosen_pattern_name or "D" in chosen_pattern_name:
-                    adj_nature_weights["ずぶとい"] = 4.0
-                    adj_nature_weights["わんぱく"] = 4.0
-                    adj_nature_weights["しんちょう"] = 4.0
-                    adj_nature_weights["おだやか"] = 4.0
-            else:
-                # 3. 極振りブッパ型 (50%)
-                ev_category = "max_out"
-                chosen_max_type = random.choice(["HA", "HB", "HC", "HD", "HS", "AS", "CS"])
-
-                if chosen_max_type == "HA":
-                    stat_points[0], stat_points[1], stat_points[5] = 32, 32, 2
-                    adj_nature_weights["いじっぱり"] = 4.0
-                elif chosen_max_type == "HB":
-                    stat_points[0], stat_points[2], stat_points[4] = 32, 32, 2
-                    adj_nature_weights["わんぱく"] = 4.0
-                elif chosen_max_type == "HC":
-                    stat_points[0], stat_points[3], stat_points[5] = 32, 32, 2
-                    adj_nature_weights["ひかえめ"] = 4.0
-                elif chosen_max_type == "HD":
-                    stat_points[0], stat_points[4], stat_points[2] = 32, 32, 2
-                    adj_nature_weights["しんちょう"] = 4.0
-                elif chosen_max_type == "HS":
-                    stat_points[0], stat_points[5], stat_points[4] = 32, 32, 2
-                    adj_nature_weights["ようき"] = 4.0
-                    adj_nature_weights["おくびょう"] = 4.0
-                elif chosen_max_type == "AS":
-                    stat_points[0], stat_points[1], stat_points[5] = 2, 32, 32
-                    adj_nature_weights["ようき"] = 4.0
-                    adj_nature_weights["いじっぱり"] = 2.5
-                elif chosen_max_type == "CS":
-                    stat_points[0], stat_points[3], stat_points[5] = 2, 32, 32
-                    adj_nature_weights["おくびょう"] = 4.0
-                    adj_nature_weights["ひかえめ"] = 2.5
+            ev_category = random.choices(ev_categories_list, weights=ev_choice_weights, k=1)[0]
 
             # 🚀 [B. 技構成の先行サンプリング]
             learnable = self.learnsets.get(name, ["テラバースト"])
@@ -661,7 +610,128 @@ class AegisTeamBuilder:
                     chosen_moves.append("わるあがき")
 
             # 🚀 [C. 確定技に基づく性格・特性抽選]
+            has_physical_attack = False
+            has_special_attack = False
+            for mv in chosen_moves:
+                mv_data = Pokemon.all_moves.get(mv)
+                if mv_data:
+                    mv_class = mv_data.get("class", "sta")
+                    if mv_class == "phy":
+                        has_physical_attack = True
+                    elif mv_class == "spc":
+                        has_special_attack = True
+
+            if any(m in chosen_moves for m in ["つるぎのまい", "りゅうのまい", "ビルドアップ"]):
+                has_physical_attack = True
+            if any(m in chosen_moves for m in ["わるだくみ", "めいそう"]):
+                has_special_attack = True
+
+            if "からをやぶる" in chosen_moves:
+                if has_physical_attack and not has_special_attack:
+                    has_physical_attack = True
+                elif has_special_attack and not has_physical_attack:
+                    has_special_attack = True
+                else:
+                    has_physical_attack = True
+                    has_special_attack = True
+
+            # 努力値配分の割り当て
+            if ev_category == "mixed":
+                if random.random() < 0.5:
+                    stat_points = self.allocate_stat_points_randomly([1, 3, 5], total_points=66, max_single=32)
+                    adj_nature_weights["せっかち"] = 7.5
+                    adj_nature_weights["むじゃき"] = 7.5
+                else:
+                    stat_points = self.allocate_stat_points_randomly([0, 1, 3], total_points=66, max_single=32)
+                    adj_nature_weights["ゆうかん"] = 7.5
+                    adj_nature_weights["れいせい"] = 7.5
+
+            elif ev_category == "hybrid":
+                hybrid_patterns = [
+                    ("HBD", [0, 2, 4]),
+                    ("HBDS", [0, 2, 4, 5]),
+                    ("HABS", [0, 1, 2, 5]),
+                    ("HBCS", [0, 2, 3, 5]),
+                    ("HAB", [0, 1, 2]),
+                    ("HBC", [0, 2, 3]),
+                    ("HAD", [0, 1, 4]),
+                    ("HCD", [0, 3, 4]),
+                    ("HAS", [0, 1, 5]),
+                    ("HCS", [0, 3, 5]),
+                    ("HBS", [0, 2, 5]),
+                    ("HDS", [0, 4, 5]),
+                ]
+
+                valid_patterns = []
+                for name_pat, idx_list in hybrid_patterns:
+                    if "A" in name_pat and has_special_attack and not has_physical_attack: continue
+                    if "C" in name_pat and has_physical_attack and not has_special_attack: continue
+                    valid_patterns.append((name_pat, idx_list))
+
+                if not valid_patterns:
+                    valid_patterns = hybrid_patterns
+
+                chosen_pattern_name, target_indices = random.choice(valid_patterns)
+                stat_points = self.allocate_stat_points_randomly(target_indices, total_points=66, max_single=32)
+
+                if "S" in chosen_pattern_name:
+                    adj_nature_weights["ようき"] = 4.0
+                    adj_nature_weights["おくびょう"] = 4.0
+                elif "B" in chosen_pattern_name or "D" in chosen_pattern_name:
+                    adj_nature_weights["ずぶとい"] = 4.0
+                    adj_nature_weights["わんぱく"] = 4.0
+                    adj_nature_weights["しんちょう"] = 4.0
+                    adj_nature_weights["おだやか"] = 4.0
+
+            else:
+                max_out_candidates = ["HB", "HD", "HS"]
+                if has_physical_attack or not has_special_attack:
+                    max_out_candidates += ["HA", "AS"]
+                if has_special_attack or not has_physical_attack:
+                    max_out_candidates += ["HC", "CS"]
+
+                chosen_max_type = random.choice(max_out_candidates)
+
+                if chosen_max_type == "HA":
+                    stat_points[0], stat_points[1], stat_points[5] = 32, 32, 2
+                    adj_nature_weights["いじっぱり"] = 4.0
+                elif chosen_max_type == "HB":
+                    stat_points[0], stat_points[2], stat_points[4] = 32, 32, 2
+                    adj_nature_weights["わんぱく"] = 4.0
+                elif chosen_max_type == "HC":
+                    stat_points[0], stat_points[3], stat_points[5] = 32, 32, 2
+                    adj_nature_weights["ひかえめ"] = 4.0
+                elif chosen_max_type == "HD":
+                    stat_points[0], stat_points[4], stat_points[2] = 32, 32, 2
+                    adj_nature_weights["しんちょう"] = 4.0
+                elif chosen_max_type == "おだやか":
+                    stat_points[0], stat_points[4], stat_points[2] = 32, 32, 2
+                    adj_nature_weights["おだやか"] = 4.0
+                elif chosen_max_type == "HS":
+                    stat_points[0], stat_points[5], stat_points[4] = 32, 32, 2
+                    adj_nature_weights["ようき"] = 4.0
+                    adj_nature_weights["おくびょう"] = 4.0
+                elif chosen_max_type == "AS":
+                    stat_points[0], stat_points[1], stat_points[5] = 2, 32, 32
+                    adj_nature_weights["ようき"] = 4.0
+                    adj_nature_weights["いじっぱり"] = 2.5
+                elif chosen_max_type == "CS":
+                    stat_points[0], stat_points[3], stat_points[5] = 2, 32, 32
+                    adj_nature_weights["おくびょう"] = 4.0
+                    adj_nature_weights["ひかえめ"] = 2.5
+
+            # 性格の最終決定
             adj_ability_weights = {}
+            if "オーロラベール" in chosen_moves or "ふぶき" in chosen_moves:
+                if "ゆきふらし" in zukan_entry.get("ability", []):
+                    adj_ability_weights["ゆきふらし"] = 5.0
+                elif "ゆきがくれ" in zukan_entry.get("ability", []):
+                    adj_ability_weights["ゆきがくれ"] = 2.0
+                assigned_items[name] = "ひかりのねんど"
+
+            if "ステルスロック" in chosen_moves or "あくび" in chosen_moves:
+                if "すなおこし" in zukan_entry.get("ability", []):
+                    adj_ability_weights["すなおこし"] = 5.0
 
             natures = list(self.NATURE_WEIGHTS.keys())
             nature_weights = [
@@ -726,6 +796,7 @@ class AegisTeamBuilder:
                             if req_type not in attack_types:
                                 weight = 0.0
 
+                        # 🌟 半減実弱点適合フィルター (インデントバグ修復版)
                         if itm in TYPE_REDUCING_BERRIES:
                             req_type = TYPE_REDUCING_BERRIES[itm]
                             is_weak = False
@@ -736,17 +807,19 @@ class AegisTeamBuilder:
                                     if def_type in Pokemon.type_id:
                                         def_id = Pokemon.type_id[def_type]
                                         eff *= Pokemon.type_corrections[atk_id][def_id]
-                                    if eff > 1.0:
-                                        is_weak = True
+                                if eff > 1.0:
+                                    is_weak = True
                             if not is_weak:
                                 weight = 0.0
 
-                        item_weights.append(weight)
+                        # 🌟【学習した持ち物の重み「dynamic_w」を乗算】
+                        dynamic_w = dyn_data.get("items", {}).get(itm, 1.0)
+                        item_weights.append(weight * dynamic_w)
 
                     if sum(item_weights) <= 0:
                         item_weights = [1.0] * len(available_items)
 
-                    # 🛡️【安全対策ガード】自分に不適合な他種族専用 of メガストーン（〜ナイト）を抽選プールから物理排除
+                    # 🛡️【安全対策ガード】自分に不適合な他種族専用 of メガストーンを排除
                     my_mega_stone = name.split("(")[0] + "ナイト"
                     filtered_available_items = []
                     filtered_item_weights = []
@@ -774,10 +847,12 @@ class AegisTeamBuilder:
                 "Ttype": zukan_entry["type"][0],
                 "moves": chosen_moves,
                 "indiv": [31, 31, 31, 31, 31, 31],
-                "effort": effort
+                "effort": effort,
+                "ev_category": ev_category  # 🌟 学習集計用に型カテゴリを記録
             }
 
         return generated_party
+
 
 # =========================================================================
 # 4. 【高度化】AegisTeamSelector (補完評価＆BERT選出予測の安全な統合)
@@ -835,7 +910,6 @@ class AegisTeamSelector:
         """
         score = 0.0
 
-        # 🌟 全習得技ではなく、今回実際に採用されている技（最大4つ）のみに限定
         my_moves = my_poke.moves if hasattr(my_poke, 'moves') and my_poke.moves else ["テラバースト"]
         opp_types = opp_poke.types
 
@@ -861,7 +935,6 @@ class AegisTeamSelector:
             if eff > best_my_eff:
                 best_my_eff = eff
 
-        # 🌟 相手側も、今回実際に採用されている技（最大4つ）のみに限定
         opp_moves = opp_poke.moves if hasattr(opp_poke, 'moves') and opp_poke.moves else ["テラバースト"]
         my_types = my_poke.types
 
@@ -1121,11 +1194,6 @@ if __name__ == "__main__":
 
 
         def patched_change_pokemon(self, player, command=None, idx=0, landing=False, *args, **kwargs):
-            """
-            CFR初期化時や交代コマンド誤認による [-20] などのアクセスエラーを防止しつつ、
-            控えポケモンが「ひんし状態」の場合に無限ループに陥るバグを防ぐため、
-            生存している（HP > 0）代替控えへの自動選定フォールバックを実行します。
-            """
             cmd = self.command[player] if (self.command and player < len(self.command)) else None
 
             if cmd is not None and isinstance(cmd, int) and 20 <= cmd <= 25:
@@ -1249,10 +1317,9 @@ if __name__ == "__main__":
             new_poke = cls.__new__(cls)
             memo[id(self)] = new_poke
 
-            avoid_keys = {'battle', '_battle', 'current_battle'}
-
+            # 🌟 すべてのバトルオブジェクトへの参照、および循環参照を難読化名含めて完全遮断
             for k, v in self.__dict__.items():
-                if k in avoid_keys:
+                if "battle" in k.lower():
                     continue
 
                 if isinstance(v, (str, int, float, bool, type(None))):
@@ -1432,7 +1499,7 @@ if __name__ == "__main__":
             for player in range(2):
                 cmd = sanitized[player]
                 active_poke = battle_obj.pokemon[player] if (
-                            battle_obj.pokemon and player < len(battle_obj.pokemon)) else None
+                        battle_obj.pokemon and player < len(battle_obj.pokemon)) else None
                 if not active_poke:
                     continue
 
@@ -1440,7 +1507,7 @@ if __name__ == "__main__":
                 if cmd is not None and 20 <= cmd <= 25:
                     switch_to_party_idx = cmd - 20
                     party = battle_obj.selected[player] if (
-                                battle_obj.selected and player < len(battle_obj.selected)) else []
+                            battle_obj.selected and player < len(battle_obj.selected)) else []
                     is_valid = True
 
                     # インデックス範囲外、あるいは瀕死(HP=0)、あるいは現在のアクティブ自身への交代は無効
@@ -1536,7 +1603,6 @@ if __name__ == "__main__":
             count = getattr(self, '_winner_call_count_in_proceed', 0) + 1
             self._winner_call_count_in_proceed = count
 
-            # 同一進行フェーズ内でwinner判定が150回以上繰り返された場合
             if count > 150:
                 print(f"\n⚠️ [Deadlock Guardian] 内部の膠着（無限ループ）を検知しました (同一ターン内判定回数: {count})。")
                 print(

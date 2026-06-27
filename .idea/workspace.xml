@@ -5,16 +5,80 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="4d7b8463-7aea-4e94-a428-df954a127bac" name="Changes" comment="sn">
-      <change beforePath="$PROJECT_DIR$/battle_data/mb_learnset.json" beforeDir="false" afterPath="$PROJECT_DIR$/battle_data/mb_learnset.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/aegis_bot.py" beforeDir="false" afterPath="$PROJECT_DIR$/aegis_bot.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/battle_data/mb_pokemon_past.txt" beforeDir="false" afterPath="$PROJECT_DIR$/battle_data/mb_pokemon_past.txt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/log/meta_weights.json" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/log/party.log" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen10_rank1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen10_rank2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen10_rank3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen11_rank1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen11_rank2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen11_rank3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen12_rank1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen12_rank2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen12_rank3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen13_rank1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen13_rank2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen13_rank3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen14_rank1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen14_rank2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen14_rank3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen1_rank1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen1_rank2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen1_rank3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen2_rank1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen2_rank2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen2_rank3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen3_rank1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen3_rank2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen3_rank3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen408_rank1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen408_rank2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen408_rank3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen409_rank1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen409_rank2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen409_rank3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen410_rank1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen410_rank2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen410_rank3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen4_rank1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen4_rank2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen4_rank3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen5_rank1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen5_rank2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen5_rank3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen6_rank1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen6_rank2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen6_rank3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen7_rank1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen7_rank2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen7_rank3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen8_rank1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen8_rank2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen8_rank3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen9_rank1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen9_rank2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/party_gen9_rank3.json" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/log/party_rank1.json" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/log/party_rank2.json" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/log/party_rank3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_1.jsonl" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_10.jsonl" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_11.jsonl" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_12.jsonl" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_13.jsonl" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_14.jsonl" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_2.jsonl" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_3.jsonl" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_4.jsonl" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_5.jsonl" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_6.jsonl" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_7.jsonl" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_8.jsonl" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_9.jsonl" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/run_meta_evolution.py" beforeDir="false" afterPath="$PROJECT_DIR$/run_meta_evolution.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/rebel/cfr_solver.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/rebel/cfr_solver.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/rebel/value_network.pth" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/rebel/value_network.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/rebel/value_network.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/train_value_network.py" beforeDir="false" afterPath="$PROJECT_DIR$/train_value_network.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -37,6 +101,9 @@
     &quot;accountId&quot;: &quot;ad31339e-eb08-4f78-bf94-63d805a838b9&quot;
   }
 }</component>
+  <component name="ProblemsViewState">
+    <option name="selectedTabId" value="CurrentFile" />
+  </component>
   <component name="ProjectColorInfo">{
   &quot;customColor&quot;: &quot;&quot;,
   &quot;associatedIndex&quot;: 7
@@ -105,7 +172,15 @@
       <option name="project" value="LOCAL" />
       <updated>1782472390119</updated>
     </task>
-    <option name="localTasksCounter" value="2" />
+    <task id="LOCAL-00002" summary="sn">
+      <option name="closed" value="true" />
+      <created>1782498472311</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1782498472311</updated>
+    </task>
+    <option name="localTasksCounter" value="3" />
     <servers />
   </component>
   <component name="VcsManagerConfiguration">

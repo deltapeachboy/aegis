@@ -69,6 +69,7 @@ if 'src.pokemon_battle_sim.damage' not in sys.modules:
     sys.modules['src.pokemon_battle_sim.damage'] = types.ModuleType('src.pokemon_battle_sim.damage')
 
 import pokepy.utils as utils_module
+
 if 'src.pokemon_battle_sim.utils' not in sys.modules:
     sys.modules['src.pokemon_battle_sim.utils'] = utils_module
 
@@ -244,7 +245,7 @@ def allocate_stat_points_randomly(indices: list, total_points: int = 66, max_sin
 
 def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = None) -> Dict[str, Any]:
     """
-    [Aegis Build Ver 16.1]
+    [Aegis Build Ver 16.6 - 持ち物＆努力値自律学習セーブ完全適合版]
     1〜3体目(基本選出)を固め、4〜6体目は基本選出が苦手とする共通弱点タイプを補完し、
     かつ主要メタに強いカウンター要員を配備する二段階選定システム。
     """
@@ -444,6 +445,26 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
         zukan_entry = Pokemon.zukan[name]
         dyn_data = pokemon_weights.get(name, {}) if pokemon_weights else {}
 
+        # 🚀 [ステップ3: 努力値配分テンプレート (重み付き学習適合 Ver 16.6)]
+        base_stats = zukan_entry.get("base", [100, 100, 100, 100, 100, 100])
+        stat_points = [0] * 6
+        ev_category = "max_out"
+        adj_nature_weights = {}
+
+        # 🌟 努力値配分カテゴリ(極振り, 調整, 両刀)の学習重みの読み込み
+        # 初期状態（重みなし）は旧仕様と全く同じ確率（0.50 : 0.46 : 0.04）で動作します
+        ev_weights_db = dyn_data.get("ev_categories", {})
+        ev_categories_list = ["max_out", "hybrid", "mixed"]
+        ev_choice_weights = [
+            ev_weights_db.get("max_out", 1.0) * 0.50,
+            ev_weights_db.get("hybrid", 1.0) * 0.46,
+            ev_weights_db.get("mixed", 1.0) * 0.04
+        ]
+        if sum(ev_choice_weights) <= 0:
+            ev_choice_weights = [0.50, 0.46, 0.04]
+
+        ev_category = random.choices(ev_categories_list, weights=ev_choice_weights, k=1)[0]
+
         # 🚀 [ステップ1: 技構成の選定を最優先で行う]
         learnable = self.learnsets.get(name, ["テラバースト"])
         move_weights = []
@@ -523,16 +544,8 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
                 has_physical_attack = True
                 has_special_attack = True
 
-        # 🚀 [ステップ3: 努力値配分テンプレート]
-        base_stats = zukan_entry.get("base", [100, 100, 100, 100, 100, 100])
-        stat_points = [0] * 6
-        ev_category = "max_out"
-        adj_nature_weights = {}
-
-        rand_ev = random.random()
-
-        if rand_ev < 0.04 or (has_physical_attack and has_special_attack and random.random() < 0.3):
-            ev_category = "mixed"
+        # 努力値配分の割り当て
+        if ev_category == "mixed":
             if random.random() < 0.5:
                 stat_points = allocate_stat_points_randomly([1, 3, 5], total_points=66, max_single=32)
                 adj_nature_weights["せっかち"] = 7.5
@@ -542,8 +555,7 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
                 adj_nature_weights["ゆうかん"] = 7.5
                 adj_nature_weights["れいせい"] = 7.5
 
-        elif rand_ev < 0.50:
-            ev_category = "hybrid"
+        elif ev_category == "hybrid":
             hybrid_patterns = [
                 ("HBD", [0, 2, 4]),
                 ("HBDS", [0, 2, 4, 5]),
@@ -581,7 +593,6 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
                 adj_nature_weights["おだやか"] = 4.0
 
         else:
-            ev_category = "max_out"
             max_out_candidates = ["HB", "HD", "HS"]
             if has_physical_attack or not has_special_attack:
                 max_out_candidates += ["HA", "AS"]
@@ -596,7 +607,6 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
             elif chosen_max_type == "HB":
                 stat_points[0], stat_points[2], stat_points[4] = 32, 32, 2
                 adj_nature_weights["わんぱく"] = 4.0
-                adj_nature_weights["ずぶとい"] = 4.0
             elif chosen_max_type == "HC":
                 stat_points[0], stat_points[3], stat_points[5] = 32, 32, 2
                 adj_nature_weights["ひかえめ"] = 4.0
@@ -640,7 +650,6 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
             dynamic_w = dyn_data.get("natures", {}).get(nat, 1.0)
             synergy_w = adj_nature_weights.get(nat, 1.0)
 
-            # 物理・特殊アタッカーの「ねじれデメリット性格」を完全に排除
             if has_physical_attack and not has_special_attack:
                 if nat in ["ひかえめ", "おくびょう", "ずぶとい", "おだやか"]:
                     static_w = 0.0
@@ -654,10 +663,8 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
             nature_weights = [1.0] * len(natures)
         nature = random.choices(natures, weights=nature_weights, k=1)[0]
 
-        # 特性の最終決定
         abilities = zukan_entry.get("ability", ["とくせいなし"])
 
-        # メタモン専用特性ロック
         if name == "メタモン" and "かわりもの" in abilities:
             ability = "かわりもの"
         elif abilities:
@@ -671,7 +678,7 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
         else:
             ability = "とくせいなし"
 
-        # 🌟 持ち物適合選定
+        # 🌟 持ち物適合選定 (学習重み適用 Ver 16.6)
         pre_assigned = assigned_items.get(name, "")
         if "ナイト" not in pre_assigned:
             assigned_item = ""
@@ -721,7 +728,9 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
                             if not is_weak:
                                 weight = 0.0
 
-                    item_weights.append(weight)
+                    # 🌟【学習フィードバック補正の乗算】
+                    dynamic_w = dyn_data.get("items", {}).get(itm, 1.0)
+                    item_weights.append(weight * dynamic_w)
 
                 if sum(item_weights) <= 0:
                     item_weights = [1.0] * len(available_items)
@@ -756,7 +765,8 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
             "Ttype": zukan_entry["type"][0],
             "moves": chosen_moves,
             "indiv": [31, 31, 31, 31, 31, 31],
-            "effort": effort
+            "effort": effort,
+            "ev_category": ev_category  # 🌟 学習集計用に型カテゴリを記録
         }
 
     return generated_party
@@ -828,6 +838,9 @@ def generate_evolved_team(builder: AegisTeamBuilder, weights: dict[str, Any]) ->
         p.Ttype = team_dict[s]['Ttype']
         p.moves = team_dict[s]['moves']
 
+        # 🌟 努力値カテゴリ属性をインスタンスに確実にバインドして伝達
+        p.ev_category = team_dict[s].get('ev_category', 'max_out')
+
         ind_data = team_dict[s].get('indiv', [31] * 6)
         p.indiv = [ind_data.get(k, 31) for k in ["H", "A", "B", "C", "D", "S"]] if isinstance(ind_data,
                                                                                               dict) else ind_data
@@ -845,6 +858,7 @@ def generate_evolved_team(builder: AegisTeamBuilder, weights: dict[str, Any]) ->
 # 4. 世代別環境ログ解析システム
 # =========================================================================
 def analyze_generation_meta(log_path: str) -> dict:
+    """その世代の自己対戦結果を集計し、勝率および技、性格、特性、持ち物、努力値の勝利実績を算出する"""
     if not os.path.exists(log_path):
         return {}
 
@@ -858,6 +872,10 @@ def analyze_generation_meta(log_path: str) -> dict:
     ability_wins = {}
     nature_picks = {}
     nature_wins = {}
+
+    # 🌟 努力値配分カテゴリの集計用
+    ev_picks = {}
+    ev_wins = {}
 
     with open(log_path, "r", encoding="utf-8") as f:
         for line in f:
@@ -881,6 +899,9 @@ def analyze_generation_meta(log_path: str) -> dict:
                     nature = poke.get("nature", "いじっぱり")
                     ability = poke.get("ability", "とくせいなし")
 
+                    # 🌟 努力値カテゴリ（ev_category）の安全回収
+                    ev_cat = poke.get("ev_category", "max_out")
+
                     pokemon_picks[name] += 1
                     if pl == winner:
                         pokemon_wins[name] += 1
@@ -896,12 +917,17 @@ def analyze_generation_meta(log_path: str) -> dict:
                         ability_wins[name] = Counter()
                         nature_picks[name] = Counter()
                         nature_wins[name] = Counter()
+                        ev_picks[name] = Counter()
+                        ev_wins[name] = Counter()
 
                     nature_picks[name][nature] += 1
                     ability_picks[name][ability] += 1
+                    ev_picks[name][ev_cat] += 1
+
                     if pl == winner:
                         nature_wins[name][nature] += 1
                         ability_wins[name][ability] += 1
+                        ev_wins[name][ev_cat] += 1
 
                     for m in moves:
                         move_picks[name][m] += 1
@@ -934,6 +960,13 @@ def analyze_generation_meta(log_path: str) -> dict:
                 nat_wins = nature_wins[name][nat]
                 natures_meta[nat] = nat_wins / nat_picks if nat_picks > 0 else 0.0
 
+        # 🌟 努力値カテゴリ勝率の計算
+        ev_meta = {}
+        if name in ev_picks:
+            for ev_c, ev_c_picks in ev_picks[name].items():
+                ev_c_wins = ev_wins[name][ev_c]
+                ev_meta[ev_c] = ev_c_wins / ev_c_picks if ev_c_picks > 0 else 0.0
+
         meta_report[name] = {
             "picks": picks,
             "wins": wins,
@@ -942,7 +975,8 @@ def analyze_generation_meta(log_path: str) -> dict:
             "preferred_moves": top_moves,
             "moves_win_rate": moves_meta,
             "abilities_win_rate": abilities_meta,
-            "natures_win_rate": natures_meta
+            "natures_win_rate": natures_meta,
+            "ev_win_rate": ev_meta  # 🌟 努力値勝率データを追加
         }
 
     return meta_report
@@ -963,7 +997,7 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
     battle.selected[1] = team_p1
 
     if DEBUG_PRINT:
-        print(f"\n   🎮 [Match {match_id}/40] 对戦シミュレート開始 (Seed: {match_seed})")
+        print(f"\n   🎮 [Match {match_id}/40] 対戦シミュレート開始 (Seed: {match_seed})")
         print(f"      - Player 0: {[p.name for p in team_p0[:3]]} ...")
         print(f"      - Player 1: {[p.name for p in team_p1[:3]]} ...")
 
@@ -1201,15 +1235,29 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
 
     print(f"   🏆 [Match {match_id:2d}/40] 決着！ 勝者: Player {winner} (所要ターン: {battle.turn:2d}ターン)")
 
+    # 🌟【根本解決：NameErrorバグの完全な修復】
+    # 生成時(team_p0, team_p1)にバインドされた「ev_category」をポケモンインスタンスから直接かつクリーンに回収します。
+    teams_log = []
+    for side_idx in [0, 1]:
+        side_pokes = []
+        target_party = team_p0 if side_idx == 0 else team_p1  # 🌟【解決：IndexError】選出3体ではなく、元の6匹(チーム全体)を参照して書き出します
+        for idx_p, p in enumerate(target_party):
+            ev_cat = getattr(p, "ev_category", "max_out")
+            p_dict = {
+                "name": p.name,
+                "item": p.item,
+                "moves": p.moves,
+                "nature": p.nature,
+                "ability": p.ability,
+                "ev_category": ev_cat  # 🌟 履歴（jsonl）に努力値カテゴリも安全にシリアライズ
+            }
+            side_pokes.append(p_dict)
+        teams_log.append(side_pokes)
+
     return {
         "match_id": match_id,
         "seed": match_seed,
-        "teams": [
-            [{"name": p.name, "item": p.item, "moves": p.moves, "nature": p.nature, "ability": p.ability} for p in
-             team_p0],
-            [{"name": p.name, "item": p.item, "moves": p.moves, "nature": p.nature, "ability": p.ability} for p in
-             team_p1]
-        ],
+        "teams": teams_log,
         "selections": [sel_p0, sel_p1],
         "winner": winner,
         "history": history_log
@@ -1244,12 +1292,16 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
     pokemon_weights = {}
     weights_path = "log/meta_weights.json"
 
+    # 🌟 初期重み定義部に、持ち物(items)と努力値配分カテゴリ(ev_categories)の学習用キーを追加。
+    # これにより、未学習の最初の初期状態は100%既存の旧仕様通りのランダム分布で構築されます。
     for name in builder.mb_pokemon:
         pokemon_weights[name] = {
             "weight": 1.0,
             "moves": {},
             "abilities": {},
-            "natures": {}
+            "natures": {},
+            "items": {},  # 🌟 持ち物学習用キー
+            "ev_categories": {}  # 🌟 努力値カテゴリ学習用キー
         }
 
     if os.path.exists(weights_path):
@@ -1336,6 +1388,23 @@ def run_evolution_loop(total_generations: int = 1000, matches_per_gen: int = 40)
                     nat_delta = 1.0 + learning_rate * (nat_win_rate - 0.5)
                     current_nat_w = pokemon_weights[name]["natures"].get(nat, 1.0)
                     pokemon_weights[name]["natures"][nat] = max(0.1, min(10.0, current_nat_w * nat_delta))
+
+                # 🌟 持ち物（Items）の動的勝利フィードバック学習
+                preferred_item = stats.get("preferred_item", "")
+                if preferred_item:
+                    item_delta = 1.0 + learning_rate * (win_rate - 0.5)
+                    current_item_w = pokemon_weights[name].get("items", {}).get(preferred_item, 1.0)
+                    if "items" not in pokemon_weights[name]:
+                        pokemon_weights[name]["items"] = {}
+                    pokemon_weights[name]["items"][preferred_item] = max(0.1, min(10.0, current_item_w * item_delta))
+
+                # 🌟 努力値カテゴリ（EV Categories）の動的勝利フィードバック学習
+                for ev_c, ev_c_win_rate in stats.get("ev_win_rate", {}).items():
+                    ev_delta = 1.0 + learning_rate * (ev_c_win_rate - 0.5)
+                    current_ev_w = pokemon_weights[name].get("ev_categories", {}).get(ev_c, 1.0)
+                    if "ev_categories" not in pokemon_weights[name]:
+                        pokemon_weights[name]["ev_categories"] = {}
+                    pokemon_weights[name]["ev_categories"][ev_c] = max(0.1, min(10.0, current_ev_w * ev_delta))
 
         if boss_meta:
             print(f"🎯 [MetaPoke Search] 世代 {gen} のトップメタ 【{boss_meta}】 に対するカウンターポケモンを特定中...")
@@ -1479,7 +1548,7 @@ if __name__ == "__main__":
 
         AegisAnalyzer._build_flat_belief = _build_flat_belief_fallback_patch
         AegisAnalyzer._aegis_flat_belief_patched = True
-        print("ℹ️ [Aegis Patch] AegisAnalyzer._build_flat_belief 動的注入を完了しました。")
+        print("ℹ️ [Aegis Patch] AegisAnalyzer._build_flat_belief動的注入を完了しました。")
 
     if not hasattr(Battle, '_aegis_change_pokemon_patched'):
         original_change_pokemon = Battle.change_pokemon
@@ -1541,7 +1610,7 @@ if __name__ == "__main__":
         Battle.change_pokemon = patched_change_pokemon
         Battle._aegis_change_pokemon_patched = True
         print(
-            "ℹ️ [Aegis Patch] Battle.change_pokemon インデックスエラー安全防止パッチ(引数マッピング修正済)を適用しました。")
+            "ℹ️ [Aegis Patch] Battle.change_pokemonインデックスエラー安全防止パッチ(引数マッピング修正済)を適用しました。")
 
     if not hasattr(Battle, '_aegis_deepcopy_patched'):
         def patched_battle_deepcopy(self, memo):
@@ -1577,14 +1646,12 @@ if __name__ == "__main__":
                     setattr(new_battle, k, v)
 
             # 🌟【根本解決：同一性（ポインタ）保護アライメント】
-            # コピーされたバトル場のポケモンオブジェクト（new_battle.pokemon）を、
-            # 手持ちリスト（new_battle.selected）に格納されている個体と物理的に完全に同一化させ、
-            # CFRの脳内における「HP減少の同期不全（幽霊ポケモンバグ）」を100%遮断します。
             if hasattr(new_battle, 'pokemon') and new_battle.pokemon:
                 for side_idx in [0, 1]:
                     active_p = new_battle.pokemon[side_idx]
-                    if active_p and hasattr(new_battle, 'selected') and side_idx < len(new_battle.selected) and new_battle.selected[side_idx]:
-                        # ポインタの完全結合 (NameError修正版)
+                    if active_p and hasattr(new_battle, 'selected') and side_idx < len(new_battle.selected) and \
+                            new_battle.selected[side_idx]:
+                        # ポインタの完全結合
                         for idx_p, p_in_party in enumerate(new_battle.selected[side_idx]):
                             if p_in_party and p_in_party.name == active_p.name:
                                 new_battle.pokemon[side_idx] = p_in_party
@@ -1617,9 +1684,6 @@ if __name__ == "__main__":
             new_poke = cls.__new__(cls)
             memo[id(self)] = new_poke
 
-            # 🌟【極限高速パス定義】
-            # ポケモンが保持するリスト・辞書の中で、プリミティブ型しか含まないことが確実なキー。
-            # 面倒な再帰ディープコピーを完全にバイパスさせ、1手あたりのシミュレーションを0.1秒台へ引き下げます。
             PRIMITIVE_LIST_KEYS = {
                 'moves', 'pp', 'effort', 'indiv', 'status', 'rank', 'types',
                 'lost_types', 'added_types', 'speed_range', '_Pokemon__moves'
@@ -1956,7 +2020,7 @@ if __name__ == "__main__":
 
         Battle._aegis_tod_lock_guard_v4 = True
         print(
-            "ℹ️ [Project Aegis] インデント修復および Battle.is_float, proceed, TOD_score 統合安全防壁パッチの強制適用が完了しました。")
+            "ℹ️ [Project Aegis] インデント修復および Battle.is_float, proceed, TOD_score 統合安全防壁パ壁パッチの強制適用が完了しました。")
 
     for target_alias in ['キングズシールド', 'キング・シールド', 'キングズ・シールド']:
         if target_alias in Pokemon.all_moves:

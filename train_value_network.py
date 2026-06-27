@@ -341,6 +341,11 @@ class SelfPlayReplayDataset(Dataset):
             p.ability = raw.get("ability", "とくせいなし")
             p.effort = raw.get("effort", [0] * 6)
 
+            # 🌟【根本解決：努力値配分カテゴリの復元】
+            # 対戦時に生成されログに記録されていた「ev_category」を安全に復元し、
+            # 再現バトル中の努力値のステータス補正を1ピクセルも狂わずに完全同期させます。
+            p.ev_category = raw.get("ev_category", "max_out")
+
             p.update_status()
             rebuilt.append(p)
         return rebuilt
