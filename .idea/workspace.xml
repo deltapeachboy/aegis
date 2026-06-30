@@ -5,14 +5,10 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="4d7b8463-7aea-4e94-a428-df954a127bac" name="Changes" comment="sn">
-      <change beforePath="$PROJECT_DIR$/aegis_bot.py" beforeDir="false" afterPath="$PROJECT_DIR$/aegis_bot.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/battle_data/mb_learnset.json" beforeDir="false" afterPath="$PROJECT_DIR$/battle_data/mb_learnset.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/battle_data/meta_evolution_report_gen119.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/battle_data/meta_evolution_report_gen158.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/battle_data/meta_evolution_report_gen193.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/battle_data/meta_evolution_report_gen396.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/battle_data/meta_evolution_report_gen411.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/generate_meta_report.py" beforeDir="false" afterPath="$PROJECT_DIR$/generate_meta_report.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/battle_data/meta_evolution_report_gen29.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/battle_data/meta_evolution_report_gen95.md" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/log/meta_weights.json" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/log/party.log" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/log/party_gen10_rank1.json" beforeDir="false" />
@@ -81,36 +77,6 @@
       <change beforePath="$PROJECT_DIR$/log/party_gen2_rank1.json" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/log/party_gen2_rank2.json" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/log/party_gen2_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen30_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen30_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen30_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen31_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen31_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen31_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen32_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen32_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen32_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen33_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen33_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen33_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen34_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen34_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen34_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen35_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen35_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen35_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen36_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen36_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen36_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen37_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen37_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen37_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen38_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen38_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen38_rank3.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen39_rank1.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen39_rank2.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/party_gen39_rank3.json" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/log/party_gen3_rank1.json" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/log/party_gen3_rank2.json" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/log/party_gen3_rank3.json" beforeDir="false" />
@@ -158,24 +124,12 @@
       <change beforePath="$PROJECT_DIR$/log/selfplay_gen_28.jsonl" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/log/selfplay_gen_29.jsonl" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/log/selfplay_gen_3.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_30.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_31.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_32.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_33.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_34.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_35.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_36.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_37.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_38.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_39.jsonl" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/log/selfplay_gen_4.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_40.jsonl" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/log/selfplay_gen_5.jsonl" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/log/selfplay_gen_6.jsonl" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/log/selfplay_gen_7.jsonl" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/log/selfplay_gen_8.jsonl" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/log/selfplay_gen_9.jsonl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/run_meta_evolution.py" beforeDir="false" afterPath="$PROJECT_DIR$/run_meta_evolution.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/rebel/value_network.pth" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -210,17 +164,17 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "ModuleVcsDetector.initialDetectionPerformed": "true",
-    "Python.generate_meta_report.executor": "Run",
-    "Python.run_meta_evolution.executor": "Run",
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "RunOnceActivity.git.unshallow": "true",
-    "git-widget-placeholder": "main",
-    "last_opened_file_path": "/Users/haruka/PycharmProjects/PythonProject7"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;Python.generate_meta_report.executor&quot;: &quot;Run&quot;,
+    &quot;Python.run_meta_evolution.executor&quot;: &quot;Run&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+    &quot;last_opened_file_path&quot;: &quot;/Users/haruka/PycharmProjects/PythonProject7&quot;
   }
-}]]></component>
+}</component>
   <component name="RunManager">
     <configuration name="run_meta_evolution" type="PythonConfigurationType" factoryName="Python" nameIsGenerated="true">
       <module name="PythonProject7" />
@@ -285,7 +239,15 @@
       <option name="project" value="LOCAL" />
       <updated>1782529063807</updated>
     </task>
-    <option name="localTasksCounter" value="4" />
+    <task id="LOCAL-00004" summary="sn">
+      <option name="closed" value="true" />
+      <created>1782595860475</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1782595860475</updated>
+    </task>
+    <option name="localTasksCounter" value="5" />
     <servers />
   </component>
   <component name="VcsManagerConfiguration">
