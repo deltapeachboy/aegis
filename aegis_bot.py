@@ -104,7 +104,7 @@ from src.llm.state_representation import battle_to_llm_state
 from src.rebel.value_network import ReBeLValueNetwork
 
 # =========================================================================
-# 🚀 [Aegis Reward Shaping Patch] 遅延報酬・特殊特性・逆転ギミック価値補正
+# 🚀 [Aegis Reward Shaping Patch Ver 16.8 - 現実世界（テンポ・サイクル）適合版]
 # =========================================================================
 _original_value_network_forward = ReBeLValueNetwork.forward if hasattr(ReBeLValueNetwork, "forward") else None
 
@@ -122,30 +122,107 @@ def shaped_value_network_forward(self, states, *args, **kwargs):
                 my_side = 0
                 opp_side = 1
 
-                # A. ステルスロック設置ボーナス (期待値勝率 ±0.05 補正)
-                if hasattr(current_battle, 'side_conditions') and current_battle.side_conditions:
-                    if current_battle.side_conditions[opp_side].get('stealth_rock'):
-                        shaped_prob += 0.05
-                    if current_battle.side_conditions[my_side].get('stealth_rock'):
-                        shaped_prob -= 0.05
-
-                # B. あくび・状態異常ボーナス (期待値勝率 ±0.03〜0.04 補正)
                 my_active = current_battle.pokemon[my_side]
                 opp_active = current_battle.pokemon[opp_side]
 
+                # ----------------------------------------------------
+                # 🌟 [追加要素 1: 交代サイクル・いかく・対面操作技の評価]
+                # ----------------------------------------------------
+                # A. 相手攻撃ダウン（いかく等のデバフ）によるサイクル恩恵評価
+                if opp_active and hasattr(opp_active, 'rank'):
+                    try:
+                        if opp_active.rank[1] < 0:
+                            shaped_prob += abs(opp_active.rank[1]) * 0.02
+                    except Exception:
+                        pass
+
+                # B. 自分攻撃ダウン（相手のいかくサイクル）に対する警戒
+                if my_active and hasattr(my_active, 'rank'):
+                    try:
+                        if my_active.rank[1] < 0:
+                            shaped_prob -= abs(my_active.rank[1]) * 0.02
+                    except Exception:
+                        pass
+
+                # C. 対面操作技（とんぼがえり、ボルトチェンジ、すてゼリフ、クイックターン）のテンポ評価
+                try:
+                    for side_idx, sign in [(my_side, 1.0), (opp_side, -1.0)]:
+                        hist = getattr(current_battle, 'history', [])
+                        if hist and len(hist) > 0:
+                            last_turn_actions = hist[-1]
+                            last_action_str = str(last_turn_actions)
+                            if any(move in last_action_str for move in ["とんぼがえり", "ボルトチェンジ", "すてゼリフ", "クイックターン"]):
+                                shaped_prob += 0.03 * sign
+                except Exception:
+                    pass
+
+                # ----------------------------------------------------
+                # 🌟 [追加要素 2: ミミッキュ「ばけのかわ」の残存監査]
+                # ----------------------------------------------------
+                if my_active and my_active.name == "ミミッキュ":
+                    try:
+                        max_hp = my_active.status[0] if (hasattr(my_active, 'status') and my_active.status[0] > 0) else 100
+                        if my_active.hp >= max_hp:
+                            shaped_prob += 0.07  # 皮が残っている状態を高く評価
+                        else:
+                            shaped_prob += 0.01  # 皮消費後は評価を大幅に引き下げ
+                    except Exception:
+                        shaped_prob += 0.05
+
+                if opp_active and opp_active.name == "ミミッキュ":
+                    try:
+                        max_hp_opp = opp_active.status[0] if (hasattr(opp_active, 'status') and opp_active.status[0] > 0) else 100
+                        if opp_active.hp >= max_hp_opp:
+                            shaped_prob -= 0.07
+                        else:
+                            shaped_prob -= 0.01
+                    except Exception:
+                        shaped_prob -= 0.05
+
+                # ----------------------------------------------------
+                # D. 設置技(ステロ, まきびし, どくびし)の有無を監査
+                # ----------------------------------------------------
+                opp_has_hazards = False
+                my_has_hazards = False
+                if hasattr(current_battle, 'side_conditions') and current_battle.side_conditions:
+                    opp_cond = current_battle.side_conditions[opp_side]
+                    my_cond = current_battle.side_conditions[my_side]
+
+                    if opp_cond.get('stealth_rock') or opp_cond.get('spikes') or opp_cond.get('toxic_spikes'):
+                        opp_has_hazards = True
+                        shaped_prob += 0.05
+                    if my_cond.get('stealth_rock') or my_cond.get('spikes') or my_cond.get('toxic_spikes'):
+                        my_has_hazards = True
+                        shaped_prob -= 0.05
+
+                # E. あくび・睡眠状態の有無を監査
+                opp_is_yawned_or_asleep = False
+                my_is_yawned_or_asleep = False
+
                 if opp_active:
-                    if getattr(opp_active, 'yawn', 0) > 0:
+                    opp_ailment = getattr(opp_active, 'ailment', 'None')
+                    if getattr(opp_active, 'yawn', 0) > 0 or opp_ailment in ['slp', '眠り']:
+                        opp_is_yawned_or_asleep = True
                         shaped_prob += 0.04
-                    if getattr(opp_active, 'status_con', None):
+                    elif getattr(opp_active, 'status_con', None) or opp_ailment not in ['None', '']:
                         shaped_prob += 0.03
 
                 if my_active:
-                    if getattr(my_active, 'yawn', 0) > 0:
+                    my_ailment = getattr(my_active, 'ailment', 'None')
+                    if getattr(my_active, 'yawn', 0) > 0 or my_ailment in ['slp', '眠り']:
+                        my_is_yawned_or_asleep = True
                         shaped_prob -= 0.04
-                    if getattr(my_active, 'status_con', None):
+                    elif getattr(my_active, 'status_con', None) or my_ailment not in ['None', '']:
                         shaped_prob -= 0.03
 
-                # C. 能力ランク（積み状態）の価値補正 (A, C, Sは+0.02、B, Dは+0.01)
+                # 🌟 F. 【設置技 ＋ あくびコンボ相乗効果】の価値前借り
+                if opp_has_hazards and opp_is_yawned_or_asleep:
+                    shaped_prob += 0.08
+
+                if my_has_hazards and my_is_yawned_or_asleep:
+                    shaped_prob -= 0.08
+
+                # G. 能力ランク（積み状態）の価値補正 (A, C, Sは+0.02、B, Dは+0.01)
                 if my_active and hasattr(my_active, 'rank'):
                     for stat_idx, factor in [(1, 0.02), (3, 0.02), (5, 0.02), (2, 0.01), (4, 0.01)]:
                         try:
@@ -160,20 +237,14 @@ def shaped_value_network_forward(self, states, *args, **kwargs):
                         except Exception:
                             pass
 
-                # D. 天候（砂嵐）天候シナジー補正 (勝率 ±0.02 補正)
+                # H. 天候（砂嵐）天候シナジー補正 (勝率 ±0.02 補正)
                 if getattr(current_battle, 'weather', None) == 'sandstorm':
                     if my_active and any(t in ['いわ', 'じめん', 'はがね'] for t in my_active.types):
                         shaped_prob += 0.02
                     if opp_active and any(t in ['いわ', 'じめん', 'はがね'] for t in opp_active.types):
                         shaped_prob -= 0.02
 
-                # E. ミミッキュの「ばけのかわ」の価値前借り (勝率 ±0.05 補正)
-                if my_active and my_active.name == "ミミッキュ":
-                    shaped_prob += 0.05
-                if opp_active and opp_active.name == "ミミッキュ":
-                    shaped_prob -= 0.05
-
-                # F. イダイトウの「おはかまいり」の価値前借り
+                # I. イダイトウの「おはかまいり」の価値前借り
                 if my_active and "イダイトウ" in my_active.name:
                     dead_count = sum(1 for p in current_battle.selected[my_side] if p.hp <= 0)
                     shaped_prob += dead_count * 0.03
@@ -181,6 +252,7 @@ def shaped_value_network_forward(self, states, *args, **kwargs):
                     dead_count_opp = sum(1 for p in current_battle.selected[opp_side] if p.hp <= 0)
                     shaped_prob -= dead_count_opp * 0.03
 
+                # 勝率予測を 1%〜99% の範囲にクリッピングして確率の破綻を防止
                 shaped_prob = max(0.01, min(0.99, shaped_prob))
                 predictions[0][0] = shaped_prob
                 predictions[0][1] = 1.0 - shaped_prob
@@ -236,7 +308,7 @@ class AegisTeamBuilder:
         "リザードン": 0.9, "メタグロス": 0.8, "バシャーモ": 0.5, "ギャラドス": 0.5,
         "カイリュー": 0.5, "キラフロル": 0.5, "クチート": 0.9, "ゲンガー": 0.66,
         "ドラミドロ": 0.66, "ハッサム": 0.66, "ミミロップ": 0.8, "メガニウム": 0.9,
-        "マフォクシー": 0.8, "ゲッコウガ": 0.5, "スターミー": 0.9, "フラエッテ(えいえん)": 0.8,
+        "マフォクシー": 0.8, "ゲッコウガ": 0.5, "スターミー": 0.9, "フラエッテ(えいえん)": 0.9,
         "フシギバナ": 0.8, "ルカリオ": 0.8, "ウツボット": 0.8, "シャンデラ": 0.66,
         "カメックス": 0.8, "バンギラス": 0.45, "ブリガロン": 0.66, "ガルーラ": 0.85,
         "ヤドラン": 0.5, "ピクシー": 0.5, "ユキメノコ": 0.66, "シビルドン": 0.8,
@@ -444,7 +516,7 @@ class AegisTeamBuilder:
         return points
 
     def build_team(self, core_name: str, pokemon_weights: Optional[dict] = None) -> Dict[str, Any]:
-        """[Aegis Build Ver 16.61 - 持ち物＆努力値動的重み適合版]"""
+        """[Aegis Build Ver 16.81 - 既存MEGA_PROBABILITIES名寄せ確率ブレンド版]"""
         if core_name == "ギルガルド" and "ギルガルド" not in Pokemon.zukan:
             for k in ['ギルガルド(シールド)', 'ギルガルド（シールド）']:
                 if k in Pokemon.zukan:

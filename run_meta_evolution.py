@@ -24,6 +24,7 @@ DEBUG_PRINT = False  # True にすると1ターンごとの詳細なCFR思考秒
 # =========================================================================
 _original_open = builtins.open
 
+
 def sanitize_pokemon_name(name: str) -> str:
     """
     シミュレータ内の戦闘中にフォルム変化して書き換えられた名前や、
@@ -32,6 +33,7 @@ def sanitize_pokemon_name(name: str) -> str:
     if name and "ギルガルド" in name:
         return "ギルガルド"
     return name
+
 
 def patched_open(file, *args, **kwargs):
     mode = args[0] if len(args) > 0 else kwargs.get("mode", "r")
@@ -108,16 +110,12 @@ def safe_set_alarm(seconds: int):
 
 
 # =========================================================================
-# 🚀 [Aegis Reward Shaping Patch Ver 16.0] 設置・状態異常・特殊価値補正
+# 🚀 [Aegis Reward Shaping Patch Ver 16.8 - 現実世界（テンポ・サイクル）適合版]
 # =========================================================================
 _original_value_network_forward = ReBeLValueNetwork.forward if hasattr(ReBeLValueNetwork, "forward") else None
 
 
 def shaped_value_network_forward(self, states, *args, **kwargs):
-    """
-    ステルスロック等の設置技と『あくび・睡眠』が同時に成立した際の
-    『起点コンボ・ループハメ展開』に強力な相乗価値補正を適用します。
-    """
     predictions = _original_value_network_forward(self, states, *args,
                                                   **kwargs) if _original_value_network_forward else states
     try:
@@ -130,35 +128,77 @@ def shaped_value_network_forward(self, states, *args, **kwargs):
                 my_side = 0
                 opp_side = 1
 
-                # A. 設置技(ステロ, まきびし, どくびし)の有無を監査
-                my_has_hazards = False
-                opp_has_hazards = False
-                if hasattr(current_battle, 'side_conditions') and current_battle.side_conditions:
-                    opp_cond = current_battle.side_conditions[opp_side]
-                    my_cond = current_battle.side_conditions[my_side]
-
-                    # 相手側のコートに設置されている場合
-                    if opp_cond.get('stealth_rock') or opp_cond.get('spikes') or opp_cond.get('toxic_spikes'):
-                        opp_has_hazards = True
-                        shaped_prob += 0.05
-                    # 自分側のコートに設置されている場合
-                    if my_cond.get('stealth_rock') or my_cond.get('spikes') or my_cond.get('toxic_spikes'):
-                        my_has_hazards = True
-                        shaped_prob -= 0.05
-
                 my_active = current_battle.pokemon[my_side]
                 opp_active = current_battle.pokemon[opp_side]
 
-                # B. あくび・睡眠状態の有無を監査
-                my_is_yawned_or_asleep = False
-                opp_is_yawned_or_asleep = False
+                # ----------------------------------------------------
+                # 🌟 [追加要素 1: 交代サイクル・威嚇・対面操作技の正当評価]
+                # ----------------------------------------------------
+                # A. 相手攻撃ダウン（いかく等のデバフ）によるサイクルアドバンテージ評価
+                if opp_active and hasattr(opp_active, 'rank'):
+                    # 相手の A(物理攻撃: ランクindex 1) が下がっている場合、サイクル（いかく）の恩恵として加算
+                    if opp_active.rank[1] < 0:
+                        shaped_prob += abs(opp_active.rank[1]) * 0.02
 
+                # B. 自分攻撃ダウン（相手のいかくサイクル）に対する警戒
+                if my_active and hasattr(my_active, 'rank'):
+                    if my_active.rank[1] < 0:
+                        shaped_prob -= abs(my_active.rank[1]) * 0.02
+
+                # C. 对面操作技（とんぼがえり、ボルトチェンジ、すてゼリフ、クイックターン）の価値評価
+                # 直近でこれらの技を使用した形跡がある場合、サイクル交代の価値として勝率を前借り
+                for side_idx, sign in [(my_side, 1.0), (opp_side, -1.0)]:
+                    hist = getattr(current_battle, 'history', [])
+                    if hist and len(hist) > 0:
+                        last_turn_actions = hist[-1]  # 直前のターン行動
+                        # 簡易的に、直近ターンで対面操作技が選択されていた場合のテンポ評価
+                        last_action_str = str(last_turn_actions)
+                        if any(move in last_action_str for move in
+                               ["とんぼがえり", "ボルトチェンジ", "すてゼリフ", "クイックターン"]):
+                            shaped_prob += 0.03 * sign
+
+                # ----------------------------------------------------
+                # 🌟 [追加要素 2: ミミッキュ「ばけのかわ」の厳密な条件監査]
+                # ----------------------------------------------------
+                # 以前: ミミッキュが場にいるだけで一律 ±0.05（皮が剥げても、HP1でも過大評価されていた）
+                # 改善: 皮が残っている可能性が高い状態（HP満タン、または特定の状態フラグ）のみ評価を加算
+                if my_active and my_active.name == "ミミッキュ":
+                    # HPが満タン（＝ばけのかわが未消費である可能性が極めて高い）
+                    max_hp = my_active.status[0] if (hasattr(my_active, 'status') and my_active.status[0] > 0) else 100
+                    if my_active.hp >= max_hp:
+                        shaped_prob += 0.07  # 皮ありミミッキュの対面性能を高く評価
+                    else:
+                        shaped_prob += 0.01  # 皮が剥げた後のミミッキュは最小限の補正に引き下げ
+
+                if opp_active and opp_active.name == "ミミッキュ":
+                    max_hp_opp = opp_active.status[0] if (
+                                hasattr(opp_active, 'status') and opp_active.status[0] > 0) else 100
+                    if opp_active.hp >= max_hp_opp:
+                        shaped_prob -= 0.07
+                    else:
+                        shaped_prob -= 0.01
+
+                # ----------------------------------------------------
+                # 以下、既存の補正ロジック（ステロ、あくび、積みランク、イダイトウ等）を継続
+                # ----------------------------------------------------
+                # D. ステルスロック設置ボーナス (期待値勝率 ±0.05 補正)
+                if hasattr(current_battle, 'side_conditions') and current_battle.side_conditions:
+                    opp_cond = current_battle.side_conditions[opp_side]
+                    my_cond = current_battle.side_conditions[my_side]
+                    if opp_cond.get('stealth_rock') or opp_cond.get('spikes') or opp_cond.get('toxic_spikes'):
+                        shaped_prob += 0.05
+                    if my_cond.get('stealth_rock') or my_cond.get('spikes') or my_cond.get('toxic_spikes'):
+                        shaped_prob -= 0.05
+
+                # E. あくび・状態異常ボーナス
+                opp_is_yawned_or_asleep = False
+                my_is_yawned_or_asleep = False
                 if opp_active:
                     opp_ailment = getattr(opp_active, 'ailment', 'None')
                     if getattr(opp_active, 'yawn', 0) > 0 or opp_ailment in ['slp', '眠り']:
                         opp_is_yawned_or_asleep = True
                         shaped_prob += 0.04
-                    if getattr(opp_active, 'status_con', None) or opp_ailment not in ['None', '']:
+                    elif getattr(opp_active, 'status_con', None) or opp_ailment not in ['None', '']:
                         shaped_prob += 0.03
 
                 if my_active:
@@ -166,17 +206,17 @@ def shaped_value_network_forward(self, states, *args, **kwargs):
                     if getattr(my_active, 'yawn', 0) > 0 or my_ailment in ['slp', '眠り']:
                         my_is_yawned_or_asleep = True
                         shaped_prob -= 0.04
-                    if getattr(my_active, 'status_con', None) or my_ailment not in ['None', '']:
+                    elif getattr(my_active, 'status_con', None) or my_ailment not in ['None', '']:
                         shaped_prob -= 0.03
 
-                # 🌟 C. 【設置技 ＋ あくびコンボ相乗効果】の価値前借り
-                if opp_has_hazards and opp_is_yawned_or_asleep:
-                    shaped_prob += 0.08  # コンボ評価としてさらに +8% 加算
+                # F. 起点コンボ相乗効果
+                if opp_cond.get('stealth_rock') and opp_is_yawned_or_asleep:
+                    shaped_prob += 0.08
+                if my_cond.get('stealth_rock') and my_is_yawned_or_asleep:
+                    shaped_prob -= 0.08
 
-                if my_has_hazards and my_is_yawned_or_asleep:
-                    shaped_prob -= 0.08  # 不利評価として -8% 減算
-
-                # D. 能力ランク（積み状態）の価値補正 (A, C, Sは+0.02、B, Dは+0.01)
+                # G. 能力ランク（積み状態）の価値補正 (A, C, Sは+0.02、B, Dは+0.01)
+                # (既存ロジックを維持)
                 if my_active and hasattr(my_active, 'rank'):
                     for stat_idx, factor in [(1, 0.02), (3, 0.02), (5, 0.02), (2, 0.01), (4, 0.01)]:
                         try:
@@ -191,20 +231,14 @@ def shaped_value_network_forward(self, states, *args, **kwargs):
                         except Exception:
                             pass
 
-                # E. 天候（砂嵐）天候シナジー補正 (勝率 ±0.02 補正)
+                # H. 天候砂嵐シナジー、イダイトウお墓参り
+                # (既存ロジックを維持)
                 if getattr(current_battle, 'weather', None) == 'sandstorm':
                     if my_active and any(t in ['いわ', 'じめん', 'はがね'] for t in my_active.types):
                         shaped_prob += 0.02
                     if opp_active and any(t in ['いわ', 'じめん', 'はがね'] for t in opp_active.types):
                         shaped_prob -= 0.02
 
-                # F. ミミッキュの「ばけのかわ」の価値前借り (勝率 ±0.05 補正)
-                if my_active and my_active.name == "ミミッキュ":
-                    shaped_prob += 0.05
-                if opp_active and opp_active.name == "ミミッキュ":
-                    shaped_prob -= 0.05
-
-                # G. イダイトウの「おはかまいり」の価値前借り
                 if my_active and "イダイトウ" in my_active.name:
                     dead_count = sum(1 for p in current_battle.selected[my_side] if p.hp <= 0)
                     shaped_prob += dead_count * 0.03
@@ -212,7 +246,7 @@ def shaped_value_network_forward(self, states, *args, **kwargs):
                     dead_count_opp = sum(1 for p in current_battle.selected[opp_side] if p.hp <= 0)
                     shaped_prob -= dead_count_opp * 0.03
 
-                # 勝率予測を 1%〜99% の範囲にクリッピングして確率の破綻を防止
+                # 勝率予測をクリッピング
                 shaped_prob = max(0.01, min(0.99, shaped_prob))
                 predictions[0][0] = shaped_prob
                 predictions[0][1] = 1.0 - shaped_prob
@@ -250,7 +284,7 @@ def allocate_stat_points_randomly(indices: list, total_points: int = 66, max_sin
 
 def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = None) -> Dict[str, Any]:
     """
-    [Aegis Build Ver 16.7 - 出現重みダイレクト構築結合版]
+    [Aegis Build Ver 16.8 - 既存MEGA_PROBABILITIES名寄せ確率ブレンド版]
     1〜3体目(基本選出)を固め、4〜6体目は基本選出が苦手とする共通弱点タイプを補完し、
     かつ主要メタに強いカウンター要員を配備する二段階選定システム。
     """
@@ -325,7 +359,14 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
             break
 
     # 🚀 【第2段階】 4〜6体目（カウンター・弱点補完選出）の決定
-    ENVIRONMENT_METAS = ["ハバタクカミ", "サーフゴー", "カイリュー", "テツノブジン", "パオジアン"]
+    ENVIRONMENT_METAS = [
+        "ガブリアス", "ミミッキュ", "マスカーニャ", "ブリジュラス", "メタグロス",
+        "ライチュウ", "リザードン", "ムクホーク", "アーマーガア", "アローラキュウコン",
+        "カバルドン", "バシャーモ", "アシレーヌ", "サザンドラ", "イダイトウ(オス)",
+        "ギャラドス", "ラグラージ", "キラフロル", "マフォクシー", "ウォッシュロトム",
+        "カイリュー", "オーロンゲ", "ペリッパー", "サーフゴー", "クチート",
+        "ラウドボーン", "ドドゲザン", "ゲッコウガ"
+    ]
 
     while len(team_members) < 6:
         basic_weaknesses = []
@@ -427,20 +468,36 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
     mega_stones_in_pool = {item for item in self.mb_items if "ナイト" in item}
     normal_items_pool = list(self.mb_items - mega_stones_in_pool)
 
+    # 🌟【確率ブレンド・例外名寄せアライメント版】
     # 事前割り当てループ (メガストーン優先配置)
     for member in team_members:
         zukan_entry = Pokemon.zukan.get(member, {})
         abilities = zukan_entry.get("ability", [])
 
-        mega_stone_name = member.split("(")[0] + "ナイト"
+        base_member_name = member.split("(")[0]
+        # get_possible_mega_stones を用いて、実在する例外的なメガストーン名を正確に取得
+        mega_candidates = get_possible_mega_stones(base_member_name)
+        valid_mega_stones = [stone for stone in mega_candidates if stone in self.mb_items]
 
-        if mega_stone_name in self.mb_items:
-            mega_prob = self.MEGA_PROBABILITIES.get(member, 0.50)
-            if random.random() < mega_prob:
-                assigned_items[member] = mega_stone_name
+        if valid_mega_stones:
+            # 既存の MEGA_PROBABILITIES から保証割合を直接取得
+            guar_prob = self.MEGA_PROBABILITIES.get(base_member_name, 0.50)
+
+            # B枠：最低保証確率 (guar_prob) の確率で、無条件にメガストーン（正しい名称）を割り当て
+            if random.random() < guar_prob:
+                assigned_items[member] = random.choice(valid_mega_stones)
                 continue
 
+            # A枠：残りの確率に入った場合は、ここでは割り当てをスキップし、
+            # 後続の通常アイテム抽選（ただし自分の正しいメガストーンも候補に残す）へ合流させます。
+
         available_items = [item for item in normal_items_pool if item not in assigned_items.values()]
+        # 🌟 自分用の正しいメガストーンを A枠通常プールに復帰（学習重みのサンプリングに載せるため）
+        if valid_mega_stones:
+            for stone in valid_mega_stones:
+                if stone not in assigned_items.values():
+                    available_items.append(stone)
+
         if available_items:
             local_item_tiers = dict(self.ITEM_TIERS)
 
@@ -453,7 +510,6 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
             if "ゆきふらし" in abilities:
                 local_item_tiers["つめたいいわ"] = 5.0
 
-            base_member_name = member.split("(")[0]
             if base_member_name in self.WALL_SETTER_POKEMON:
                 local_item_tiers["ひかりのねんど"] = 5.0
 
@@ -703,10 +759,20 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
 
         # 🌟 持ち物適合選定 (学習重み適用 Ver 16.6)
         pre_assigned = assigned_items.get(name, "")
-        if "ナイト" not in pre_assigned:
+
+        # 修正：割り当てられたのがメガストーン（正しい候補に含まれるもの）でなければ通常選択
+        is_mega_assigned = any(stone == pre_assigned for stone in valid_mega_stones) if valid_mega_stones else False
+        if not is_mega_assigned:
             assigned_item = ""
             available_items = [itm for itm in normal_items_pool if
                                itm not in assigned_items.values() or itm == pre_assigned]
+
+            # 🌟 自分用の正しいメガストーンを通常抽選候補にも復帰（学習重みによる動的サンプリングを受けるため）
+            if valid_mega_stones:
+                for stone in valid_mega_stones:
+                    if stone not in assigned_items.values() and stone not in available_items:
+                        available_items.append(stone)
+
             if available_items:
                 local_item_tiers = dict(self.ITEM_TIERS)
 
@@ -763,7 +829,7 @@ def patched_build_team(self, core_name: str, pokemon_weights: Optional[dict] = N
                 filtered_available_items = []
                 filtered_item_weights = []
                 for idx_itm, itm in enumerate(available_items):
-                    if "ナイト" in itm and itm != my_mega_stone:
+                    if "ナイト" in itm and itm != my_mega_stone and itm not in valid_mega_stones:
                         continue
                     filtered_available_items.append(itm)
                     filtered_item_weights.append(item_weights[idx_itm])
@@ -1023,7 +1089,7 @@ def run_generation_match_file(match_id: int, builder: AegisTeamBuilder, selector
     battle.selected[1] = team_p1
 
     if DEBUG_PRINT:
-        print(f"\n   🎮 [Match {match_id}/40] 対戦シミュレート開始 (Seed: {match_seed})")
+        print(f"\n   🎮 [Match {match_id}/40] 对戦シミュレート開始 (Seed: {match_seed})")
         print(f"      - Player 0: {[p.name for p in team_p0[:3]]} ...")
         print(f"      - Player 1: {[p.name for p in team_p1[:3]]} ...")
 
@@ -2051,10 +2117,11 @@ if __name__ == "__main__":
 
         Battle._aegis_tod_lock_guard_v4 = True
         print(
-            "ℹ️ [Project Aegis] インデント修復および Battle.is_float, proceed, TOD_score 統合安全防壁パッチの強制適用が完了しました。")
+            "ℹ️ [Project Aegis] インデント修復および Battle.is_float, proceed, TOD_score 統合安全防壁パ壁パッチの強制適用が完了しました。")
 
     for target_alias in ['キングズシールド', 'キング・シールド', 'キングズ・シールド']:
         if target_alias in Pokemon.all_moves:
             Pokemon.all_moves['キングシールド'] = Pokemon.all_moves[target_alias]
             break
-run_evolution_loop(total_generations=1000, matches_per_gen=40)
+
+    run_evolution_loop(total_generations=1000, matches_per_gen=40)
