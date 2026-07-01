@@ -5,12 +5,12 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="4d7b8463-7aea-4e94-a428-df954a127bac" name="Changes" comment="sn">
-      <change beforePath="$PROJECT_DIR$/battle_data/mb_learnset.json" beforeDir="false" afterPath="$PROJECT_DIR$/battle_data/mb_learnset.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/aegis_bot.py" beforeDir="false" afterPath="$PROJECT_DIR$/aegis_bot.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/battle_data/mb_pokemon_past.txt" beforeDir="false" afterPath="$PROJECT_DIR$/battle_data/mb_pokemon_past.txt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/log/meta_weights.json" beforeDir="false" afterPath="$PROJECT_DIR$/log/meta_weights.json" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/log/party_rank1.json" beforeDir="false" afterPath="$PROJECT_DIR$/log/party_rank1.json" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/log/party_rank2.json" beforeDir="false" afterPath="$PROJECT_DIR$/log/party_rank2.json" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/log/party_rank3.json" beforeDir="false" afterPath="$PROJECT_DIR$/log/party_rank3.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/selfplay_gen_4.jsonl" beforeDir="false" afterPath="$PROJECT_DIR$/log/selfplay_gen_4.jsonl" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/rebel/value_network.pth" beforeDir="false" afterPath="$PROJECT_DIR$/src/rebel/value_network.pth" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -144,7 +144,15 @@
       <option name="project" value="LOCAL" />
       <updated>1782859720882</updated>
     </task>
-    <option name="localTasksCounter" value="7" />
+    <task id="LOCAL-00007" summary="sn">
+      <option name="closed" value="true" />
+      <created>1782863649156</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1782863649156</updated>
+    </task>
+    <option name="localTasksCounter" value="8" />
     <servers />
   </component>
   <component name="VcsManagerConfiguration">
